@@ -2,13 +2,13 @@
 setlocal EnableDelayedExpansion
 
 REM ============================================================
-REM  OpenHintSQL — Deploy to all installed SSMS versions
+REM  OpenHintSQL - Install to all installed SSMS versions
 REM  Run as Administrator
 REM
 REM  Supported: SSMS 18.12.1 / 19.3 / 20.2.1 / 21.x / 22.x
 REM
-REM  Usage:  deploy.bat          — deploys to every installed version
-REM          deploy.bat 20       — deploys to SSMS 20 only
+REM  Usage:  install.bat         - installs to every detected version
+REM          install.bat 20      - installs to SSMS 20 only
 REM ============================================================
 
 set BUILD_DIR=%~dp0src\OpenHintSQL\bin\Release\net48
@@ -16,7 +16,7 @@ set TARGET_VERSION=%1
 set BUILD_LOG=%TEMP%\OpenHintSQL-build.log
 
 echo.
-echo  OpenHintSQL Deployment Script
+echo  OpenHintSQL Install Script
 echo  ================================
 echo.
 
@@ -31,7 +31,7 @@ if %ERRORLEVEL% neq 0 (
 tasklist 2>nul | find /I "Ssms.exe" >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     echo  ERROR: SSMS is currently running.
-    echo  Please save your work, close all SSMS windows, then run deploy.bat again.
+    echo  Please save your work, close all SSMS windows, then run install.bat again.
     pause
     exit /b 1
 )
@@ -59,17 +59,17 @@ REM Format: VERSION  PF_DIR  ISOSHELL_SUFFIX
 REM SSMS 18-20 install to Program Files (x86)  [32-bit]
 REM SSMS 21-22 install to Program Files        [64-bit]
 
-set DEPLOYED=0
+set INSTALLED=0
 
 for %%V in (18 19 20 21 22) do (
     if "!TARGET_VERSION!"=="" (
-        call :deploy_version %%V
+        call :install_version %%V
     ) else if "!TARGET_VERSION!"=="%%V" (
-        call :deploy_version %%V
+        call :install_version %%V
     )
 )
 
-if %DEPLOYED%==0 (
+if %INSTALLED%==0 (
     echo  No matching SSMS installation found.
     if not "%TARGET_VERSION%"=="" (
         echo  SSMS %TARGET_VERSION% does not appear to be installed.
@@ -82,7 +82,7 @@ if %DEPLOYED%==0 (
 
 echo.
 echo  ================================================
-echo   Deployment complete!  %DEPLOYED% SSMS version(s) updated.
+echo   Install complete!  %INSTALLED% SSMS version(s) updated.
 echo   Open SSMS and check View ^> Output ^> OpenHint SQL.
 echo  ================================================
 echo.
@@ -91,7 +91,7 @@ exit /b 0
 
 
 REM ============================================================
-:deploy_version
+:install_version
 REM  Args: %1 = major version number (18/19/20/21/22)
 REM ============================================================
 set V=%1
@@ -140,8 +140,8 @@ for /D %%C in ("%LOCALAPPDATA%\Microsoft\SSMS\%V%.0_*") do (
     call :clear_cache_root "%%~C"
 )
 
-echo  SSMS %V% : deployed successfully.
-set /A DEPLOYED+=1
+echo  SSMS %V% : installed successfully.
+set /A INSTALLED+=1
 goto :eof
 
 

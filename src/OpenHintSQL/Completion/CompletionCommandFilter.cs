@@ -511,6 +511,8 @@ namespace OpenHintSQL.Completion
                 var items = CompletionEngine.GetCompletionItems(
                     prefix, fullText, caretOffset, server, database, connectionString);
 
+                Logger.Log($"Completion generated {items?.Count ?? 0} item(s) for prefix='{prefix}'");
+
                 if (items != null && items.Count > 0)
                 {
                     _popup.Show(_textView, items);

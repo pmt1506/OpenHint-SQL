@@ -85,7 +85,7 @@ namespace OpenHintSQL.Connection
                 "Microsoft.SqlServer.Management.UI.VSIntegration.SSqlEditorService");
             if (serviceType == null)
             {
-                Logger.Warn("SSqlEditorService type not found");
+                Logger.Log("SSqlEditorService not available; using legacy connection lookup");
                 return null;
             }
 
@@ -133,17 +133,16 @@ namespace OpenHintSQL.Connection
         /// </summary>
         private static ConnectionInfo GetConnectionViaReflection()
         {
-            var vsIntegrationAssembly = FindLoadedAssembly(
-                "Microsoft.SqlServer.Management.UI.VSIntegration");
-
-            if (vsIntegrationAssembly == null)
+            var serviceCacheType = FindLoadedType(
+                "Microsoft.SqlServer.Management.UI.VSIntegration.ServiceCache");
+            if (serviceCacheType == null)
             {
-                Logger.Warn("VSIntegration assembly not loaded");
-                return null;
+                TryLoadSsmsAssembly("Microsoft.SqlServer.SqlTools.VSIntegration");
+                TryLoadSsmsAssembly("Microsoft.SqlServer.Management.UI.VSIntegration");
+                serviceCacheType = FindLoadedType(
+                    "Microsoft.SqlServer.Management.UI.VSIntegration.ServiceCache");
             }
 
-            var serviceCacheType = vsIntegrationAssembly.GetType(
-                "Microsoft.SqlServer.Management.UI.VSIntegration.ServiceCache");
             if (serviceCacheType == null)
             {
                 Logger.Warn("ServiceCache type not found");
@@ -156,8 +155,25 @@ namespace OpenHintSQL.Connection
             var scriptFactory = scriptFactoryProp?.GetValue(null);
             if (scriptFactory == null)
             {
-                Logger.Warn("ScriptFactory returned null via reflection");
-                return null;
+                Logger.Warn("ScriptFactory returned null via ServiceCache; trying global IScriptFactory service");
+
+                var scriptFactoryType = FindLoadedType(
+                    "Microsoft.SqlServer.Management.UI.VSIntegration.Editors.IScriptFactory");
+                if (scriptFactoryType == null)
+                {
+                    TryLoadSsmsAssembly("SqlWorkbench.Interfaces");
+                    scriptFactoryType = FindLoadedType(
+                        "Microsoft.SqlServer.Management.UI.VSIntegration.Editors.IScriptFactory");
+                }
+
+                if (scriptFactoryType != null)
+                    scriptFactory = ResolveVisualStudioService(scriptFactoryType, scriptFactoryType);
+
+                if (scriptFactory == null)
+                {
+                    Logger.Warn("ScriptFactory unavailable via reflection");
+                    return null;
+                }
             }
 
             var connInfoWrapper = GetPropertyValue(scriptFactory, "CurrentlyActiveWndConnectionInfo");
@@ -275,9 +291,45 @@ namespace OpenHintSQL.Connection
             if (string.IsNullOrWhiteSpace(connectionString))
                 return connectionString;
 
-            return connectionString
+            var normalized = connectionString
                 .Replace("Multiple Active Result Sets", "MultipleActiveResultSets")
                 .Replace("Trust Server Certificate", "TrustServerCertificate");
+
+            return RemoveConnectionStringKeywords(normalized, "Command Timeout");
+        }
+
+        private static string RemoveConnectionStringKeywords(string connectionString, params string[] keysToRemove)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString) || keysToRemove == null || keysToRemove.Length == 0)
+                return connectionString;
+
+            var parts = connectionString.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            var kept = new System.Collections.Generic.List<string>();
+            foreach (var part in parts)
+            {
+                var separatorIndex = part.IndexOf('=');
+                if (separatorIndex <= 0)
+                {
+                    kept.Add(part);
+                    continue;
+                }
+
+                var key = part.Substring(0, separatorIndex).Trim();
+                bool remove = false;
+                foreach (var keyToRemove in keysToRemove)
+                {
+                    if (string.Equals(key, keyToRemove, StringComparison.OrdinalIgnoreCase))
+                    {
+                        remove = true;
+                        break;
+                    }
+                }
+
+                if (!remove)
+                    kept.Add(part);
+            }
+
+            return string.Join(";", kept);
         }
 
         private static bool ShouldUseIntegratedSecurity(string userName, string password, string authenticationType)
@@ -461,6 +513,48 @@ namespace OpenHintSQL.Connection
                 {
                     // Skip assemblies that throw on metadata access.
                 }
+            }
+
+            return null;
+        }
+
+        private static Assembly TryLoadSsmsAssembly(string simpleName)
+        {
+            try
+            {
+                var loaded = FindLoadedAssembly(simpleName);
+                if (loaded != null)
+                    return loaded;
+
+                return Assembly.Load(simpleName);
+            }
+            catch
+            {
+                // Fall through to LoadFrom below.
+            }
+
+            try
+            {
+                var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                var path = System.IO.Path.Combine(baseDirectory, simpleName + ".dll");
+                if (!System.IO.File.Exists(path))
+                {
+                    var processDirectory = System.IO.Path.GetDirectoryName(
+                        System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName);
+                    if (!string.IsNullOrEmpty(processDirectory))
+                        path = System.IO.Path.Combine(processDirectory, simpleName + ".dll");
+                }
+
+                if (System.IO.File.Exists(path))
+                {
+                    var assembly = Assembly.LoadFrom(path);
+                    Logger.Log($"Loaded SSMS assembly {simpleName} from {path}");
+                    return assembly;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Could not load SSMS assembly {simpleName}: {ex.Message}");
             }
 
             return null;

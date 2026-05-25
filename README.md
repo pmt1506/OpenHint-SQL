@@ -26,12 +26,12 @@ OpenHint SQL targets SSMS 18 through SSMS 22.
 | SSMS version | Architecture | Support status |
 |---|---:|---|
 | 18.x | 32-bit | Supported; smoke-tested on SSMS 18 |
-| 19.x | 32-bit | Supported by VSIX manifest and deploy script |
+| 19.x | 32-bit | Supported by VSIX manifest and install script |
 | 20.x | 32-bit | Supported; smoke-tested on SSMS 20 |
-| 21.x | 64-bit | Supported by VSIX manifest and deploy script |
+| 21.x | 64-bit | Supported by VSIX manifest and install script |
 | 22.x | 64-bit | Supported; smoke-tested on SSMS 22 |
 
-`deploy.bat` and the installer auto-detect installed SSMS 18/19/20/21/22 instances and install into every detected version in one pass. SSMS 18-20 use the 32-bit VS isolated shell; SSMS 21-22 use the 64-bit VS 2022 shell.
+`install.bat` and the installer auto-detect installed SSMS 18/19/20/21/22 instances and install into every detected version in one pass. SSMS 18-20 use the 32-bit VS isolated shell; SSMS 21-22 use the 64-bit VS 2022 shell.
 
 ---
 
@@ -46,7 +46,7 @@ OpenHint SQL targets SSMS 18 through SSMS 22.
 
 **Verify it loaded:** View → Output → select **OpenHint SQL** from the dropdown.
 
-### Option B — Build and deploy from source
+### Option B — Build and install from source
 
 **Prerequisites:** .NET SDK 6+, .NET Framework 4.8, at least one SSMS installation.
 
@@ -56,11 +56,11 @@ cd OpenHint-SQL
 
 dotnet build src\OpenHintSQL\OpenHintSQL.csproj -c Release
 
-REM Deploy to all installed SSMS versions (run as Administrator)
-deploy.bat
+REM Install to all detected SSMS versions (run as Administrator)
+install.bat
 
-REM Deploy to a specific version only
-deploy.bat 20
+REM Install to a specific version only
+install.bat 20
 ```
 
 ---
@@ -235,7 +235,7 @@ Keyed by SHA-1 of `server|database`. Stores tables, columns (with PK flags), pro
 **No "OpenHint SQL" pane in the Output window / popup never appears**
 
 1. Confirm the DLL is in place: `<SSMS IDE dir>\Extensions\OpenHintSQL\OpenHintSQL.dll`
-2. Re-run `deploy.bat` as Administrator — this rebuilds the extension and MEF caches.
+2. Re-run `install.bat` as Administrator — this rebuilds the extension and MEF caches.
 3. For a detailed load error, start SSMS with the activity log:
    ```cmd
    "C:\Program Files (x86)\Microsoft SQL Server Management Studio 20\Common7\IDE\Ssms.exe" /log

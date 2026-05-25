@@ -56,13 +56,13 @@ namespace OpenHintSQL.Schema
 
                 // Stale — trigger background refresh but still return stale data
                 Logger.Log($"Schema stale for [{key}], triggering background refresh");
-                StartBackgroundLoad(key, connectionString);
+                StartBackgroundLoad(key, connectionString, allowDiskCache: false);
                 return cached;
             }
 
             // Cache miss — fire background load and return Empty immediately
             Logger.Log($"Schema cache miss for [{key}], starting background load");
-            StartBackgroundLoad(key, connectionString);
+            StartBackgroundLoad(key, connectionString, allowDiskCache: true);
             return DatabaseSchema.Empty;
         }
 
@@ -78,7 +78,7 @@ namespace OpenHintSQL.Schema
             _cache.TryRemove(key, out _);
             SchemaPersister.Invalidate(key);
 
-            return LoadSchemaAsync(key, connectionString);
+            return LoadSchemaAsync(key, connectionString, allowDiskCache: false);
         }
 
         /// <summary>
@@ -94,7 +94,7 @@ namespace OpenHintSQL.Schema
         /// <summary>
         /// Starts a background schema load if one isn't already in progress for this key.
         /// </summary>
-        private static void StartBackgroundLoad(string key, string connectionString)
+        private static void StartBackgroundLoad(string key, string connectionString, bool allowDiskCache)
         {
             // Use GetOrAdd to ensure only one load per key
             _loadingTasks.GetOrAdd(key, k =>
@@ -103,7 +103,7 @@ namespace OpenHintSQL.Schema
                 {
                     try
                     {
-                        await LoadSchemaAsync(k, connectionString).ConfigureAwait(false);
+                        await LoadSchemaAsync(k, connectionString, allowDiskCache).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -123,15 +123,21 @@ namespace OpenHintSQL.Schema
         /// only falls back to a live DB query if the disk cache is missing or stale.
         /// Successful DB loads are written back to disk so the next SSMS restart is fast.
         /// </summary>
-        private static async Task LoadSchemaAsync(string key, string connectionString)
+        private static async Task LoadSchemaAsync(string key, string connectionString, bool allowDiskCache)
         {
-            // 1. Fast path: disk cache.
-            var fromDisk = await SchemaPersister.TryLoadAsync(key).ConfigureAwait(false);
-            if (fromDisk != null && fromDisk.IsLoaded)
+            // 1. Fast path: disk cache. Only use this for cold cache misses.
+            // Stale in-memory entries must refresh from the server, otherwise a
+            // stale disk snapshot can reload itself forever and repeatedly retrigger
+            // the completion popup.
+            if (allowDiskCache)
             {
-                _cache[key] = fromDisk;
-                NotifySchemaLoaded(key, fromDisk);
-                return;
+                var fromDisk = await SchemaPersister.TryLoadAsync(key).ConfigureAwait(false);
+                if (fromDisk != null && fromDisk.IsLoaded)
+                {
+                    _cache[key] = fromDisk;
+                    NotifySchemaLoaded(key, fromDisk);
+                    return;
+                }
             }
 
             // 2. Slow path: query the server.

@@ -237,6 +237,7 @@ namespace OpenHintSQL.UI
                     _currentPrefix = string.Empty;
 
                     _listBox.ItemsSource = _filteredItems;
+                    Logger.Log($"CompletionPopup.Show with {_filteredItems.Count} item(s)");
 
                     if (_filteredItems.Count > 0)
                     {
