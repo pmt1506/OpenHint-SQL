@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Concurrent;
+using System.Data.SqlClient;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using OpenHintSQL.Utils;
 
@@ -15,7 +18,7 @@ namespace OpenHintSQL.Schema
         /// <summary>Cache TTL — schemas older than this are considered stale.</summary>
         private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
-        /// <summary>Cached schemas keyed by "server|database".</summary>
+        /// <summary>Cached schemas keyed by "server|database|connection-fingerprint".</summary>
         private static readonly ConcurrentDictionary<string, DatabaseSchema> _cache
             = new ConcurrentDictionary<string, DatabaseSchema>(StringComparer.OrdinalIgnoreCase);
 
@@ -25,7 +28,7 @@ namespace OpenHintSQL.Schema
 
         /// <summary>
         /// Raised when a schema finishes loading in the background.
-        /// Parameters: cache key (server|database), loaded schema.
+        /// Parameters: cache key (server|database|connection-fingerprint), loaded schema.
         /// </summary>
         public static event Action<string, DatabaseSchema> OnSchemaLoaded;
 
@@ -40,7 +43,7 @@ namespace OpenHintSQL.Schema
         /// <returns>The cached schema, or Empty if not yet loaded.</returns>
         public static DatabaseSchema GetOrLoad(string server, string database, string connectionString)
         {
-            var key = BuildKey(server, database);
+            var key = BuildKey(server, database, connectionString);
 
             // Check for a valid cached entry
             if (_cache.TryGetValue(key, out var cached) && cached.IsLoaded)
@@ -69,7 +72,7 @@ namespace OpenHintSQL.Schema
         /// </summary>
         public static Task RefreshAsync(string server, string database, string connectionString)
         {
-            var key = BuildKey(server, database);
+            var key = BuildKey(server, database, connectionString);
             Logger.Log($"Manual schema refresh requested for [{key}]");
 
             _cache.TryRemove(key, out _);
@@ -167,11 +170,51 @@ namespace OpenHintSQL.Schema
         }
 
         /// <summary>
-        /// Builds a cache key from server and database names.
+        /// Builds a cache key from server, database, and the effective connection
+        /// string. The connection string is hashed so credentials never appear in logs
+        /// or on disk, while different active SSMS query-window connections do not
+        /// share a schema cache accidentally.
         /// </summary>
-        private static string BuildKey(string server, string database)
+        private static string BuildKey(string server, string database, string connectionString)
         {
-            return $"{server}|{database}";
+            return $"{server}|{database}|{BuildConnectionFingerprint(connectionString)}";
+        }
+
+        private static string BuildConnectionFingerprint(string connectionString)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+                return "no-connection";
+
+            try
+            {
+                var builder = new SqlConnectionStringBuilder(connectionString);
+
+                // Runtime-only knobs should not split the cache; identity/security knobs should.
+                builder.Remove("Application Name");
+                builder.Remove("Connect Timeout");
+                builder.Remove("Connection Timeout");
+                builder.Remove("Pooling");
+                builder.Remove("Min Pool Size");
+                builder.Remove("Max Pool Size");
+
+                return "cs-" + Hash(builder.ConnectionString);
+            }
+            catch
+            {
+                return "cs-" + Hash(connectionString);
+            }
+        }
+
+        private static string Hash(string value)
+        {
+            using (var sha = SHA1.Create())
+            {
+                var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(value.ToLowerInvariant()));
+                var sb = new StringBuilder(10);
+                for (int i = 0; i < 5; i++)
+                    sb.Append(bytes[i].ToString("x2"));
+                return sb.ToString();
+            }
         }
     }
 }

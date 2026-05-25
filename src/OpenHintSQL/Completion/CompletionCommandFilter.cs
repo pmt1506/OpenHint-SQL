@@ -192,6 +192,10 @@ namespace OpenHintSQL.Completion
 
                         case VSConstants.VSStd2KCmdID.DOWN:
                             return HandleUpDown(isUp: false);
+
+                        case VSConstants.VSStd2KCmdID.SHOWMEMBERLIST:
+                        case VSConstants.VSStd2KCmdID.COMPLETEWORD:
+                            return HandleCompletionList();
                     }
                 }
                 else if (pguidCmdGroup == VSConstants.GUID_VSStandardCommandSet97)
@@ -346,6 +350,23 @@ namespace OpenHintSQL.Completion
             return VSConstants.E_FAIL;
         }
 
+        /// <summary>
+        /// Handles explicit completion requests such as Ctrl+Space.
+        /// </summary>
+        private int HandleCompletionList()
+        {
+            try
+            {
+                TriggerCompletion(allowEmptyPrefix: true);
+                return IsPopupVisible() ? VSConstants.S_OK : VSConstants.E_FAIL;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("HandleCompletionList failed", ex);
+                return VSConstants.E_FAIL;
+            }
+        }
+
         // ═══════════════════════════════════════════════════════════════
         //  POST-PROCESSING HANDLERS
         // ═══════════════════════════════════════════════════════════════
@@ -451,7 +472,7 @@ namespace OpenHintSQL.Completion
                 // If the popup is already visible AND the user is still narrowing a word,
                 // just update the filter. Empty-prefix triggers (FROM␣ / JOIN␣ / dot) always
                 // need a fresh query — they swap the popup's contents entirely.
-                if (IsPopupVisible() && !string.IsNullOrEmpty(prefix))
+                if (IsPopupVisible() && !string.IsNullOrEmpty(prefix) && !_popup.IsShowingStatus)
                 {
                     _popup.UpdateFilter(prefix);
 

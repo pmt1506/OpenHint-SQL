@@ -155,11 +155,38 @@ namespace OpenHintSQL.Completion
             {
                 // No schema completion without a connection
                 if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(database))
+                {
+                    if (ContextNeedsSchema(context))
+                    {
+                        results.Add(BuildStatusItem(
+                            "No active database connection",
+                            "Connect the query window to enable table and column suggestions"));
+                    }
                     return;
+                }
+
+                if (string.IsNullOrEmpty(connectionString))
+                {
+                    if (ContextNeedsSchema(context))
+                    {
+                        results.Add(BuildStatusItem(
+                            "Connection details unavailable",
+                            "Open a connected query window and try again"));
+                    }
+                    return;
+                }
 
                 var schema = SchemaCache.GetOrLoad(server, database, connectionString);
                 if (schema == null || !schema.IsLoaded)
+                {
+                    if (ContextNeedsSchema(context))
+                    {
+                        results.Add(BuildStatusItem(
+                            "Loading database schema...",
+                            $"{server} / {database}"));
+                    }
                     return;
+                }
 
                 // Dot-context (alias-qualified) wins regardless of the surrounding clause:
                 // typing `c.` always means "columns of whatever c resolves to".
@@ -219,6 +246,41 @@ namespace OpenHintSQL.Completion
             }
         }
 
+        private static CompletionItemData BuildStatusItem(string text, string description)
+        {
+            return new CompletionItemData
+            {
+                Text = text,
+                InsertText = string.Empty,
+                Description = description,
+                Kind = CompletionItemKind.Status,
+                Priority = 1000,
+                IconKey = "Status"
+            };
+        }
+
+        private static bool ContextNeedsSchema(SqlContext context)
+        {
+            switch (context)
+            {
+                case SqlContext.FromClause:
+                case SqlContext.JoinClause:
+                case SqlContext.UpdateTarget:
+                case SqlContext.InsertColumns:
+                case SqlContext.SelectClause:
+                case SqlContext.WhereClause:
+                case SqlContext.OnClause:
+                case SqlContext.OrderByClause:
+                case SqlContext.GroupByClause:
+                case SqlContext.HavingClause:
+                case SqlContext.SetClause:
+                case SqlContext.Exec:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         /// <summary>
         /// Counts unclosed `(` characters in the text between the nearest preceding
         /// clause keyword and the caret. Used to decide whether the caret is at a
@@ -254,6 +316,14 @@ namespace OpenHintSQL.Completion
             {
                 if (string.IsNullOrEmpty(prefix))
                 {
+                    if (schema.Tables.Count == 0 && schema.Views.Count == 0)
+                    {
+                        results.Add(BuildStatusItem(
+                            "No user tables or views found",
+                            "Check the active database in the query window"));
+                        return;
+                    }
+
                     foreach (var table in schema.Tables.Values)
                         results.Add(BuildTableItem(table));
                     foreach (var view in schema.Views.Values)
@@ -486,6 +556,12 @@ namespace OpenHintSQL.Completion
             if (byShort.Count == 1)
                 return byShort[0];
 
+            var viewByShort = schema.Views.Values
+                .Where(v => string.Equals(v.Name, tableName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (viewByShort.Count == 1)
+                return viewByShort[0];
+
             return null;
         }
 
@@ -538,6 +614,15 @@ namespace OpenHintSQL.Completion
             if (string.IsNullOrEmpty(fullText) || schema == null)
                 return referenced;
 
+            foreach (var scoped in ResolveScopedTables(fullText, schema))
+            {
+                if (scoped.Table != null)
+                    referenced.Add(scoped.Table.FullName);
+            }
+
+            if (referenced.Count > 0)
+                return referenced;
+
             var words = Regex.Split(fullText, @"[^\w]");
             foreach (var word in words)
             {
@@ -548,6 +633,12 @@ namespace OpenHintSQL.Completion
                     referenced.Add(word);
                 else if (schema.Views.ContainsKey(word))
                     referenced.Add(word);
+                else
+                {
+                    var table = ResolveTable(schema, null, word);
+                    if (table != null)
+                        referenced.Add(table.FullName);
+                }
             }
 
             return referenced;

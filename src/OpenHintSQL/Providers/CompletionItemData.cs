@@ -14,6 +14,7 @@ namespace OpenHintSQL.Providers
         Function,
         DataType,
         Schema,
+        Status,
         /// <summary>
         /// A composite "JOIN &lt;table&gt; &lt;alias&gt; ON ..." suggestion derived from a foreign key.
         /// <c>InsertText</c> begins at the table name (the leading "JOIN " is preserved from what the user typed).
@@ -67,6 +68,8 @@ namespace OpenHintSQL.Providers
                         return "D";
                     case CompletionItemKind.Schema:
                         return "N";
+                    case CompletionItemKind.Status:
+                        return "i";
                     case CompletionItemKind.JoinSuggestion:
                         return "J";
                     default:

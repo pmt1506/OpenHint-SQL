@@ -109,6 +109,26 @@ namespace OpenHintSQL.UI
         }
 
         /// <summary>
+        /// Gets whether the popup is currently displaying a non-insertable status row
+        /// such as schema-loading feedback.
+        /// </summary>
+        public bool IsShowingStatus
+        {
+            get
+            {
+                try
+                {
+                    return _filteredItems != null &&
+                           _filteredItems.Any(item => item.Kind == CompletionItemKind.Status);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
         /// Gets the currently selected item, or null if nothing is selected.
         /// </summary>
         public CompletionItemData SelectedItem

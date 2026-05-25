@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -17,6 +18,10 @@ namespace OpenHintSQL.Utils
         private static readonly Guid PaneGuid = new Guid("E7A1F2B3-C4D5-4E6F-A7B8-C9D0E1F2A3B4");
         private static readonly object _lock = new object();
         private static bool _initialized;
+        private static readonly string LogFilePath =
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "OpenHintSQL",
+                "OpenHintSQL.log");
 
         /// <summary>
         /// Initialize the logger with a reference to the VS shell.
@@ -50,6 +55,8 @@ namespace OpenHintSQL.Utils
         {
             var timestamped = $"[OpenHintSQL {DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}";
             Debug.Write(timestamped);
+
+            WriteFileLog(timestamped);
 
             if (!_initialized || _pane == null) return;
 
@@ -90,6 +97,22 @@ namespace OpenHintSQL.Utils
         {
             private static Guid _paneGuid = PaneGuid;
             public static ref Guid AsRef(Guid _) => ref _paneGuid;
+        }
+
+        private static void WriteFileLog(string message)
+        {
+            try
+            {
+                lock (_lock)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(LogFilePath));
+                    File.AppendAllText(LogFilePath, message);
+                }
+            }
+            catch
+            {
+                // File logging is diagnostic only and must never affect editor behavior.
+            }
         }
     }
 }
