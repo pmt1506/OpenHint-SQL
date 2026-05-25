@@ -1,0 +1,114 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>OpenHintSQL</RootNamespace>
+    <AssemblyName>OpenHintSQL</AssemblyName>
+    <!-- AnyCPU: SSMS 18-20 are 32-bit; SSMS 21+ are 64-bit. AnyCPU lets the CLR
+         choose the right bitness at load time inside each host process. -->
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <UseWPF>true</UseWPF>
+
+    <!-- VSIX Build Properties -->
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
+    <IncludeDebugSymbolsInLocalVSIXDeployment>false</IncludeDebugSymbolsInLocalVSIXDeployment>
+    <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
+    <CopyOutputSymbolsToOutputDirectory>false</CopyOutputSymbolsToOutputDirectory>
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <DeployExtension>false</DeployExtension>
+    <UseCodebase>true</UseCodebase>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- VSIX Build Tools (backward compatible, works for VS 2019 shell targets) -->
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.8.2365">
+      <IncludeAssets>build; analyzers</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+
+    <!-- VS Shell SDK — version 15.x targets VS 2017 Isolated Shell (SSMS 20) -->
+    <PackageReference Include="Microsoft.VisualStudio.Shell.15.0" Version="15.9.28307" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.Shell.Framework" Version="15.9.28307" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading" Version="15.8.209" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.Shell.Interop" Version="7.10.6072" ExcludeAssets="runtime" />
+
+    <!-- Editor and IntelliSense APIs -->
+    <PackageReference Include="Microsoft.VisualStudio.Editor" Version="15.8.525" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.Language.Intellisense" Version="15.8.525" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.Text.UI.Wpf" Version="15.8.525" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.TextManager.Interop" Version="7.10.6071" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.CoreUtility" Version="15.8.525" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.OLE.Interop" Version="7.10.6071" ExcludeAssets="runtime" />
+
+    <!-- Data access for schema loading -->
+    <PackageReference Include="System.Data.SqlClient" Version="4.8.6" />
+
+    <!-- JSON for config files. Copy locally because SSMS 18 does not always expose it to MEF. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- SSMS Assembly References (from SSMS install directory) -->
+  <PropertyGroup>
+    <SsmsInstallDir Condition="'$(SsmsInstallDir)' == ''">C:\Program Files (x86)\Microsoft SQL Server Management Studio 20\Common7\IDE</SsmsInstallDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ServiceCache, IScriptFactory, CurrentlyActiveWndConnectionInfo -->
+    <Reference Include="Microsoft.SqlServer.Management.UI.VSIntegration" Condition="Exists('$(SsmsInstallDir)\Microsoft.SqlServer.Management.UI.VSIntegration.dll')">
+      <HintPath>$(SsmsInstallDir)\Microsoft.SqlServer.Management.UI.VSIntegration.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SqlPackageBase" Condition="Exists('$(SsmsInstallDir)\SqlPackageBase.dll')">
+      <HintPath>$(SsmsInstallDir)\SqlPackageBase.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Microsoft.SqlServer.ConnectionInfo" Condition="Exists('$(SsmsInstallDir)\Microsoft.SqlServer.ConnectionInfo.dll')">
+      <HintPath>$(SsmsInstallDir)\Microsoft.SqlServer.ConnectionInfo.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SqlWorkbench.Interfaces" Condition="Exists('$(SsmsInstallDir)\SqlWorkbench.Interfaces.dll')">
+      <HintPath>$(SsmsInstallDir)\SqlWorkbench.Interfaces.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Microsoft.SqlServer.RegSvrEnum" Condition="Exists('$(SsmsInstallDir)\Microsoft.SqlServer.RegSvrEnum.dll')">
+      <HintPath>$(SsmsInstallDir)\Microsoft.SqlServer.RegSvrEnum.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Content files included in VSIX -->
+  <ItemGroup>
+    <Content Include="Config\snippets.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="source.extension.vsixmanifest" />
+    <None Include="OpenHintSQL.pkgdef">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <PropertyGroup>
+    <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">17.0</VisualStudioVersion>
+    <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>
+    <VsSdkTargetsPath Condition="'$(VsSdkTargetsPath)' == '' and Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')">$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets</VsSdkTargetsPath>
+    <VsSdkTargetsPath Condition="'$(VsSdkTargetsPath)' == '' and Exists('$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v17.0\VSSDK\Microsoft.VsSDK.targets')">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v17.0\VSSDK\Microsoft.VsSDK.targets</VsSdkTargetsPath>
+    <VsSdkTargetsPath Condition="'$(VsSdkTargetsPath)' == '' and Exists('$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v16.0\VSSDK\Microsoft.VsSDK.targets')">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v16.0\VSSDK\Microsoft.VsSDK.targets</VsSdkTargetsPath>
+  </PropertyGroup>
+
+  <Import Project="$(VsSdkTargetsPath)" Condition="'$(VsSdkTargetsPath)' != ''" />
+
+</Project>

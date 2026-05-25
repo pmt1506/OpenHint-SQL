@@ -1,0 +1,262 @@
+{
+  "snippets": [
+    {
+      "shortcut": "ssf",
+      "title": "Select Star From",
+      "expansion": "SELECT * FROM $cursor$",
+      "description": "SELECT * FROM"
+    },
+    {
+      "shortcut": "st100",
+      "title": "Select Top 100",
+      "expansion": "SELECT TOP 100 * FROM $cursor$",
+      "description": "SELECT TOP 100 * FROM"
+    },
+    {
+      "shortcut": "st10",
+      "title": "Select Top 10",
+      "expansion": "SELECT TOP 10 * FROM $cursor$",
+      "description": "SELECT TOP 10 * FROM"
+    },
+    {
+      "shortcut": "st1",
+      "title": "Select Top 1",
+      "expansion": "SELECT TOP 1 * FROM $cursor$",
+      "description": "SELECT TOP 1 * FROM"
+    },
+    {
+      "shortcut": "sf",
+      "title": "Select From",
+      "expansion": "SELECT $columns$\nFROM $cursor$",
+      "description": "SELECT columns FROM"
+    },
+    {
+      "shortcut": "s",
+      "title": "Select",
+      "expansion": "SELECT $cursor$",
+      "description": "SELECT"
+    },
+    {
+      "shortcut": "del",
+      "title": "Delete",
+      "expansion": "DELETE FROM $table$\nWHERE $cursor$",
+      "description": "DELETE FROM ... WHERE"
+    },
+    {
+      "shortcut": "ut",
+      "title": "Update",
+      "expansion": "UPDATE $table$\nSET $column$ = $value$\nWHERE $cursor$",
+      "description": "UPDATE ... SET ... WHERE"
+    },
+    {
+      "shortcut": "iit",
+      "title": "Insert Into",
+      "expansion": "INSERT INTO $table$ ($columns$)\nVALUES ($cursor$)",
+      "description": "INSERT INTO ... VALUES"
+    },
+    {
+      "shortcut": "ii",
+      "title": "Insert Into Select",
+      "expansion": "INSERT INTO $target$\nSELECT $columns$\nFROM $cursor$",
+      "description": "INSERT INTO ... SELECT FROM"
+    },
+    {
+      "shortcut": "jn",
+      "title": "Inner Join",
+      "expansion": "INNER JOIN $table$ ON $cursor$",
+      "description": "INNER JOIN ... ON"
+    },
+    {
+      "shortcut": "lj",
+      "title": "Left Join",
+      "expansion": "LEFT JOIN $table$ ON $cursor$",
+      "description": "LEFT JOIN ... ON"
+    },
+    {
+      "shortcut": "rj",
+      "title": "Right Join",
+      "expansion": "RIGHT JOIN $table$ ON $cursor$",
+      "description": "RIGHT JOIN ... ON"
+    },
+    {
+      "shortcut": "cj",
+      "title": "Cross Join",
+      "expansion": "CROSS JOIN $cursor$",
+      "description": "CROSS JOIN"
+    },
+    {
+      "shortcut": "fj",
+      "title": "Full Outer Join",
+      "expansion": "FULL OUTER JOIN $table$ ON $cursor$",
+      "description": "FULL OUTER JOIN ... ON"
+    },
+    {
+      "shortcut": "ct",
+      "title": "Create Table",
+      "expansion": "CREATE TABLE $schema$.[$tableName$] (\n    $cursor$\n)",
+      "description": "CREATE TABLE"
+    },
+    {
+      "shortcut": "at",
+      "title": "Alter Table Add Column",
+      "expansion": "ALTER TABLE $table$\nADD $columnName$ $dataType$ $cursor$",
+      "description": "ALTER TABLE ADD"
+    },
+    {
+      "shortcut": "dt",
+      "title": "Drop Table",
+      "expansion": "DROP TABLE IF EXISTS $cursor$",
+      "description": "DROP TABLE IF EXISTS"
+    },
+    {
+      "shortcut": "wh",
+      "title": "Where",
+      "expansion": "WHERE $cursor$",
+      "description": "WHERE"
+    },
+    {
+      "shortcut": "ob",
+      "title": "Order By",
+      "expansion": "ORDER BY $cursor$",
+      "description": "ORDER BY"
+    },
+    {
+      "shortcut": "gb",
+      "title": "Group By",
+      "expansion": "GROUP BY $cursor$",
+      "description": "GROUP BY"
+    },
+    {
+      "shortcut": "hv",
+      "title": "Having",
+      "expansion": "HAVING $cursor$",
+      "description": "HAVING"
+    },
+    {
+      "shortcut": "bgn",
+      "title": "Begin End",
+      "expansion": "BEGIN\n    $cursor$\nEND",
+      "description": "BEGIN ... END block"
+    },
+    {
+      "shortcut": "bgt",
+      "title": "Begin Transaction",
+      "expansion": "BEGIN TRANSACTION\n    $cursor$\nCOMMIT TRANSACTION",
+      "description": "BEGIN TRANSACTION ... COMMIT"
+    },
+    {
+      "shortcut": "btry",
+      "title": "Begin Try Catch",
+      "expansion": "BEGIN TRY\n    $cursor$\nEND TRY\nBEGIN CATCH\n    SELECT \n        ERROR_NUMBER() AS ErrorNumber,\n        ERROR_MESSAGE() AS ErrorMessage,\n        ERROR_SEVERITY() AS ErrorSeverity,\n        ERROR_STATE() AS ErrorState;\nEND CATCH",
+      "description": "BEGIN TRY ... END TRY BEGIN CATCH ... END CATCH"
+    },
+    {
+      "shortcut": "iff",
+      "title": "If Begin End",
+      "expansion": "IF $condition$\nBEGIN\n    $cursor$\nEND",
+      "description": "IF ... BEGIN ... END"
+    },
+    {
+      "shortcut": "ife",
+      "title": "If Else",
+      "expansion": "IF $condition$\nBEGIN\n    $cursor$\nEND\nELSE\nBEGIN\n    \nEND",
+      "description": "IF ... ELSE"
+    },
+    {
+      "shortcut": "wl",
+      "title": "While Loop",
+      "expansion": "WHILE $condition$\nBEGIN\n    $cursor$\nEND",
+      "description": "WHILE ... BEGIN ... END"
+    },
+    {
+      "shortcut": "ex",
+      "title": "Exists",
+      "expansion": "EXISTS (SELECT 1 FROM $table$ WHERE $cursor$)",
+      "description": "EXISTS (SELECT ...)"
+    },
+    {
+      "shortcut": "nex",
+      "title": "Not Exists",
+      "expansion": "NOT EXISTS (SELECT 1 FROM $table$ WHERE $cursor$)",
+      "description": "NOT EXISTS (SELECT ...)"
+    },
+    {
+      "shortcut": "cc",
+      "title": "Case When",
+      "expansion": "CASE\n    WHEN $condition$ THEN $result$\n    ELSE $default$\nEND",
+      "description": "CASE WHEN ... THEN ... ELSE ... END"
+    },
+    {
+      "shortcut": "cte",
+      "title": "CTE (Common Table Expression)",
+      "expansion": "WITH $cteName$ AS (\n    SELECT $cursor$\n)\nSELECT *\nFROM $cteName$",
+      "description": ";WITH CTE AS (...) SELECT"
+    },
+    {
+      "shortcut": "rcte",
+      "title": "Recursive CTE",
+      "expansion": "WITH $cteName$ AS (\n    -- Anchor\n    SELECT $cursor$\n    UNION ALL\n    -- Recursive\n    SELECT $columns$\n    FROM $cteName$ c\n)\nSELECT *\nFROM $cteName$\nOPTION (MAXRECURSION 100)",
+      "description": "Recursive CTE with UNION ALL"
+    },
+    {
+      "shortcut": "cp",
+      "title": "Create Procedure",
+      "expansion": "CREATE PROCEDURE $schema$.$procName$\n    @Param1 INT\nAS\nBEGIN\n    SET NOCOUNT ON;\n    $cursor$\nEND\nGO",
+      "description": "CREATE PROCEDURE"
+    },
+    {
+      "shortcut": "ap",
+      "title": "Alter Procedure",
+      "expansion": "ALTER PROCEDURE $schema$.$procName$\n    @Param1 INT\nAS\nBEGIN\n    SET NOCOUNT ON;\n    $cursor$\nEND\nGO",
+      "description": "ALTER PROCEDURE"
+    },
+    {
+      "shortcut": "cv",
+      "title": "Create View",
+      "expansion": "CREATE VIEW $schema$.$viewName$\nAS\nSELECT $cursor$\nGO",
+      "description": "CREATE VIEW"
+    },
+    {
+      "shortcut": "ci",
+      "title": "Create Index",
+      "expansion": "CREATE NONCLUSTERED INDEX IX_$tableName$_$columnName$\nON $table$ ($cursor$)",
+      "description": "CREATE NONCLUSTERED INDEX"
+    },
+    {
+      "shortcut": "dv",
+      "title": "Declare Variable",
+      "expansion": "DECLARE @$varName$ $dataType$ = $cursor$",
+      "description": "DECLARE @variable"
+    },
+    {
+      "shortcut": "dvt",
+      "title": "Declare Table Variable",
+      "expansion": "DECLARE @$varName$ TABLE (\n    $cursor$\n)",
+      "description": "DECLARE @table TABLE"
+    },
+    {
+      "shortcut": "tmp",
+      "title": "Temp Table",
+      "expansion": "IF OBJECT_ID('tempdb..#$tmpName$') IS NOT NULL DROP TABLE #$tmpName$\n\nCREATE TABLE #$tmpName$ (\n    $cursor$\n)",
+      "description": "Create temp table with IF EXISTS drop"
+    },
+    {
+      "shortcut": "sinto",
+      "title": "Select Into Temp",
+      "expansion": "SELECT $columns$\nINTO #$tmpName$\nFROM $cursor$",
+      "description": "SELECT INTO #temp FROM"
+    },
+    {
+      "shortcut": "mg",
+      "title": "Merge",
+      "expansion": "MERGE INTO $target$ AS t\nUSING $source$ AS s\nON t.$keyCol$ = s.$keyCol$\nWHEN MATCHED THEN\n    UPDATE SET\n        $cursor$\nWHEN NOT MATCHED THEN\n    INSERT ($columns$)\n    VALUES ($values$);",
+      "description": "MERGE INTO ... USING ... ON"
+    },
+    {
+      "shortcut": "pv",
+      "title": "Pivot",
+      "expansion": "SELECT *\nFROM (\n    SELECT $cursor$\n) AS src\nPIVOT (\n    $aggFunc$($valueCol$)\n    FOR $pivotCol$ IN ([$val1$], [$val2$])\n) AS pvt",
+      "description": "PIVOT query"
+    }
+  ]
+}

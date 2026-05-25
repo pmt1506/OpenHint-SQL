@@ -1,0 +1,21 @@
+[$RootKey$\Packages\{63D8CFAD-D1FF-40EB-80DB-7728DEDD7A91}]
+@="OpenHintSQLPackage"
+"InprocessServer32"="$PackageFolder$\OpenHintSQL.dll"
+"Class"="OpenHintSQL.OpenHintSQLPackage"
+"AllowsBackgroundLoading"=dword:00000001
+
+[$RootKey$\AutoLoadPackages\{adfc4e64-0397-11d1-9f4e-00a0c9110047}]
+"{63D8CFAD-D1FF-40EB-80DB-7728DEDD7A91}"=dword:00000002
+
+[$RootKey$\AutoLoadPackages\{f1536ef8-92ec-443c-9ed7-fd64497c226d}]
+"{63D8CFAD-D1FF-40EB-80DB-7728DEDD7A91}"=dword:00000002
+
+[$RootKey$\AutoLoadPackages\{adfc4e64-0397-11d1-9f4e-00a0c911004f}]
+"{63D8CFAD-D1FF-40EB-80DB-7728DEDD7A91}"=dword:00000002
+
+[$RootKey$\AutoLoadPackages\{f1536ef8-92ec-443c-9ed7-fdadf150da82}]
+"{63D8CFAD-D1FF-40EB-80DB-7728DEDD7A91}"=dword:00000002
+
+; ShellInitialized — {e8a3a1e3-fa96-4bae-a76e-41f7b0456805}
+[$RootKey$\AutoLoadPackages\{e8a3a1e3-fa96-4bae-a76e-41f7b0456805}]
+"{63D8CFAD-D1FF-40EB-80DB-7728DEDD7A91}"=dword:00000002
