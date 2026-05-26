@@ -227,14 +227,17 @@ namespace OpenHintSQL.Completion
                 {
                     // ── Table-position contexts ─────────────────────────────────
                     case SqlContext.FromClause:
+                        AddTablesAndViews(results, schema, prefix, includeAlias: true, excludeCurrentJoin: false, fullText: fullText, caretOffset: caretOffset);
+                        break;
+
                     case SqlContext.UpdateTarget:
-                        AddTablesAndViews(results, schema, prefix);
+                        AddTablesAndViews(results, schema, prefix, includeAlias: false, excludeCurrentJoin: false, fullText: fullText, caretOffset: caretOffset);
                         break;
 
                     case SqlContext.JoinClause:
                         // FK-aware JOIN suggestions float above generic table matches.
                         AddJoinSuggestions(results, schema, fullText, caretOffset, prefix);
-                        AddTablesAndViews(results, schema, prefix);
+                        AddTablesAndViews(results, schema, prefix, includeAlias: true, excludeCurrentJoin: true, fullText: fullText, caretOffset: caretOffset);
                         break;
 
                     case SqlContext.InsertColumns:
@@ -244,7 +247,7 @@ namespace OpenHintSQL.Completion
                         // as the only schema-aware branch; columns inside the paren are
                         // left to the dot-context path (typing `foo.` works there).
                         if (ParenDepthAfterContextKeyword(fullText, caretOffset) == 0)
-                            AddTablesAndViews(results, schema, prefix);
+                            AddTablesAndViews(results, schema, prefix, includeAlias: false, excludeCurrentJoin: false, fullText: fullText, caretOffset: caretOffset);
                         break;
 
                     // ── Column-position contexts ────────────────────────────────
@@ -462,10 +465,18 @@ namespace OpenHintSQL.Completion
         private static void AddTablesAndViews(
             List<CompletionItemData> results,
             DatabaseSchema schema,
-            string prefix)
+            string prefix,
+            bool includeAlias,
+            bool excludeCurrentJoin,
+            string fullText,
+            int caretOffset)
         {
             try
             {
+                var usedAliases = includeAlias
+                    ? GetUsedAliases(fullText, caretOffset, schema, excludeCurrentJoin)
+                    : null;
+
                 if (string.IsNullOrEmpty(prefix))
                 {
                     if (schema.Tables.Count == 0 && schema.Views.Count == 0)
@@ -477,22 +488,22 @@ namespace OpenHintSQL.Completion
                     }
 
                     foreach (var table in schema.Tables.Values)
-                        results.Add(BuildTableItem(table));
+                        results.Add(BuildTableItem(table, includeAlias, usedAliases));
                     foreach (var view in schema.Views.Values)
-                        results.Add(BuildViewItem(view));
+                        results.Add(BuildViewItem(view, includeAlias, usedAliases));
                     return;
                 }
 
-                var matches = schema.GetMatchingObjects(prefix);
-                if (matches != null)
+                foreach (var table in schema.Tables.Values)
                 {
-                    foreach (var item in matches)
-                    {
-                        if (item.Kind == CompletionItemKind.Table || item.Kind == CompletionItemKind.View)
-                        {
-                            results.Add(item);
-                        }
-                    }
+                    if (MatchesTablePrefix(table, prefix))
+                        results.Add(BuildTableItem(table, includeAlias, usedAliases));
+                }
+
+                foreach (var view in schema.Views.Values)
+                {
+                    if (MatchesTablePrefix(view, prefix))
+                        results.Add(BuildViewItem(view, includeAlias, usedAliases));
                 }
             }
             catch (Exception ex)
@@ -501,25 +512,79 @@ namespace OpenHintSQL.Completion
             }
         }
 
-        private static CompletionItemData BuildTableItem(TableInfo t) => new CompletionItemData
+        private static CompletionItemData BuildTableItem(TableInfo t, bool includeAlias, HashSet<string> usedAliases)
         {
-            Text = t.FullName,
-            InsertText = t.BracketedName,
-            Description = $"Table: {t.BracketedName}",
-            Kind = CompletionItemKind.Table,
-            Priority = 10,
-            IconKey = "Table"
-        };
+            var insertText = BuildObjectInsertText(t, includeAlias, usedAliases);
+            return new CompletionItemData
+            {
+                Text = t.FullName,
+                InsertText = insertText,
+                Description = $"Table: {insertText}",
+                Kind = CompletionItemKind.Table,
+                Priority = 10,
+                IconKey = "Table"
+            };
+        }
 
-        private static CompletionItemData BuildViewItem(TableInfo v) => new CompletionItemData
+        private static CompletionItemData BuildViewItem(TableInfo v, bool includeAlias, HashSet<string> usedAliases)
         {
-            Text = v.FullName,
-            InsertText = v.BracketedName,
-            Description = $"View: {v.BracketedName}",
-            Kind = CompletionItemKind.View,
-            Priority = 15,
-            IconKey = "View"
-        };
+            var insertText = BuildObjectInsertText(v, includeAlias, usedAliases);
+            return new CompletionItemData
+            {
+                Text = v.FullName,
+                InsertText = insertText,
+                Description = $"View: {insertText}",
+                Kind = CompletionItemKind.View,
+                Priority = 15,
+                IconKey = "View"
+            };
+        }
+
+        private static string BuildObjectInsertText(TableInfo table, bool includeAlias, HashSet<string> usedAliases)
+        {
+            if (!includeAlias || table == null)
+                return table?.BracketedName;
+
+            var alias = GenerateAlias(table.Name, usedAliases ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            return $"{table.BracketedName} {alias}";
+        }
+
+        private static bool MatchesTablePrefix(TableInfo table, string prefix)
+        {
+            if (table == null)
+                return false;
+
+            return MatchesPrefix(table.FullName, prefix) ||
+                   MatchesPrefix(table.Name, prefix) ||
+                   MatchesPrefix(table.BracketedName, prefix);
+        }
+
+        private static HashSet<string> GetUsedAliases(
+            string fullText,
+            int caretOffset,
+            DatabaseSchema schema,
+            bool excludeCurrentJoin)
+        {
+            var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (schema == null || string.IsNullOrEmpty(fullText))
+                return aliases;
+
+            int limit = Math.Min(Math.Max(caretOffset, 0), fullText.Length);
+            if (limit == 0)
+                return aliases;
+
+            var scopeText = excludeCurrentJoin
+                ? GetCompletedJoinScopeText(fullText, limit)
+                : fullText.Substring(0, limit);
+
+            foreach (var scoped in ResolveScopedTables(scopeText, schema))
+            {
+                if (!string.IsNullOrWhiteSpace(scoped.EffectiveAlias))
+                    aliases.Add(scoped.EffectiveAlias);
+            }
+
+            return aliases;
+        }
 
         // ───────────────────────────────────────────────
         //  JOIN suggestions (FK-aware)
@@ -534,6 +599,10 @@ namespace OpenHintSQL.Completion
             @"(?:\[?(\w+)\]?\.)?" +
             @"\[?(\w+)\]?" +
             @"(?:\s+(?:AS\s+)?(\w+))?",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly Regex JoinKeywordPattern = new Regex(
+            @"\b(?:JOIN|APPLY)\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         /// <summary>
@@ -567,7 +636,7 @@ namespace OpenHintSQL.Completion
                 if (limit == 0)
                     return;
 
-                var scopeText = fullText.Substring(0, limit);
+                var scopeText = GetCompletedJoinScopeText(fullText, limit);
                 var scoped = ResolveScopedTables(scopeText, schema);
                 if (scoped.Count == 0)
                     return;
@@ -692,6 +761,21 @@ namespace OpenHintSQL.Completion
             }
 
             return result;
+        }
+
+        private static string GetCompletedJoinScopeText(string fullText, int caretOffset)
+        {
+            if (string.IsNullOrEmpty(fullText) || caretOffset <= 0)
+                return string.Empty;
+
+            int limit = Math.Min(Math.Max(caretOffset, 0), fullText.Length);
+            var beforeCaret = fullText.Substring(0, limit);
+            var matches = JoinKeywordPattern.Matches(beforeCaret);
+            if (matches.Count == 0)
+                return beforeCaret;
+
+            var currentJoin = matches[matches.Count - 1];
+            return beforeCaret.Substring(0, currentJoin.Index);
         }
 
         private static TableInfo ResolveTable(DatabaseSchema schema, string schemaName, string tableName)

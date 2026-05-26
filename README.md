@@ -84,7 +84,7 @@ The popup opens automatically as you type. Navigation: `↑`/`↓` to move, `Tab
 | After `USE ` | Databases visible on the active server |
 | Anywhere else | T-SQL keywords, functions, and snippet shortcuts |
 
-Accepting a table or view inserts the fully qualified bracketed name, for example `[dbo].[Collections]`. Accepting a database after `USE ` inserts `[DatabaseName]`.
+Accepting a table or view inserts the fully qualified bracketed name, for example `[Sales].[Orders]`. In `FROM` and `JOIN` positions, OpenHint SQL also appends a short alias such as `[Sales].[Orders] o` so later column and JOIN suggestions can use the alias immediately. Accepting a database after `USE ` inserts `[DatabaseName]`.
 
 On first use after opening SSMS, schema metadata loads from the disk cache (instant) or fetches live from the server in the background. Database-name suggestions are cached in memory per server connection. The popup refreshes automatically when loading completes.
 

@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Windows.Threading;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Language.Intellisense;
@@ -39,6 +40,9 @@ namespace OpenHintSQL.Completion
         private bool _isDisposed;
         private DispatcherTimer _nativeCompletionSuppressTimer;
         private DateTime _nativeCompletionSuppressUntilUtc;
+        private static readonly Regex JoinSuggestionTailBoundaryPattern = new Regex(
+            @"\b(?:INNER\s+JOIN|LEFT\s+(?:OUTER\s+)?JOIN|RIGHT\s+(?:OUTER\s+)?JOIN|FULL\s+(?:OUTER\s+)?JOIN|CROSS\s+JOIN|JOIN|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|UNION|EXCEPT|INTERSECT)\b|;",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         /// <summary>
         /// The next command target in the chain. Set by the caller after AddCommandFilter.
@@ -702,7 +706,10 @@ namespace OpenHintSQL.Completion
                 int replaceStart = IsObjectReferenceCompletion(item)
                     ? GetObjectReferenceBeforeCaretStart(caretPos)
                     : _textView.GetWordBeforeCaretStart();
-                int wordLength = caretPos - replaceStart;
+                int replaceEnd = item.Kind == CompletionItemKind.JoinSuggestion
+                    ? GetJoinSuggestionReplaceEnd(caretPos)
+                    : caretPos;
+                int wordLength = Math.Max(0, replaceEnd - replaceStart);
 
                 if (wordLength >= 0)
                 {
@@ -741,6 +748,46 @@ namespace OpenHintSQL.Completion
             {
                 Logger.Warn($"GetObjectReferenceBeforeCaretStart failed: {ex.Message}");
                 return _textView.GetWordBeforeCaretStart();
+            }
+        }
+
+        private int GetJoinSuggestionReplaceEnd(int caretPos)
+        {
+            try
+            {
+                var snapshot = _textView?.TextSnapshot;
+                if (snapshot == null)
+                    return caretPos;
+
+                string text = snapshot.GetText();
+                int end = Math.Min(Math.Max(caretPos, 0), snapshot.Length);
+
+                // If the caret is in the middle of a partially typed table token,
+                // replace the whole token, not just the left side.
+                while (end < snapshot.Length && IsObjectReferencePrefixChar(text[end]))
+                    end++;
+
+                int lineEnd = end;
+                while (lineEnd < snapshot.Length && text[lineEnd] != '\r' && text[lineEnd] != '\n')
+                    lineEnd++;
+
+                if (lineEnd <= end)
+                    return end;
+
+                var tail = text.Substring(end, lineEnd - end);
+                var onMatch = Regex.Match(tail, @"^\s+ON\b", RegexOptions.IgnoreCase);
+                if (!onMatch.Success)
+                    return end;
+
+                // Replace a stale/partial ON clause after the caret with the
+                // FK-generated ON clause. Stop before the next clause on the same line.
+                var boundary = JoinSuggestionTailBoundaryPattern.Match(tail, onMatch.Index + onMatch.Length);
+                return boundary.Success ? end + boundary.Index : lineEnd;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"GetJoinSuggestionReplaceEnd failed: {ex.Message}");
+                return caretPos;
             }
         }
 
