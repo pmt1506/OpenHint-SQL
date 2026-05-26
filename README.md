@@ -2,19 +2,22 @@
 
 OpenHint SQL is an open-source SQL autocomplete and syntax suggestion extension designed to help developers write queries faster.
 
-Provides instant, context-aware suggestions for tables, columns, stored procedures, and T-SQL keywords — with foreign-key-driven JOIN suggestions and a library of snippet shortcuts that expand on Tab.
+Provides instant, context-aware suggestions for databases, tables, columns, stored procedures, and T-SQL keywords — with foreign-key-driven JOIN suggestions and a library of snippet shortcuts that expand on Tab.
 
 ---
 
 ## Features
 
 - **Context-aware autocomplete** — tables and views after `FROM`/`JOIN`; columns after `SELECT`, `WHERE`, `ORDER BY`, `GROUP BY`; stored procedures after `EXEC`
+- **Database autocomplete** — after `USE `, suggests databases visible to the active login on the current server
+- **Bracket-safe insertions** — tables/views insert as `[schema].[object]`; databases insert as `[database]`
 - **FK-aware JOIN suggestions** — when a `FROM` table is in scope, typing `JOIN` surfaces related tables with the full `ON` clause pre-built from the actual foreign key (e.g. `Orders o ON o.CustomerId = c.Id`)
 - **Dot completion** — `alias.` immediately lists that table's columns with data type and PK/NULL labels
 - **40+ snippet shortcuts** — type a short code, press `Tab`, get a full statement with the cursor placed at the right position
 - **Persistent schema cache** — schema loads once per database and writes to disk; subsequent SSMS restarts load from cache instantly without re-querying the server (24-hour TTL)
 - **Eager preload** — schema fetch starts in the background the moment a query window opens, so the popup is ready before you need it
-- **Dark-themed popup** — custom WPF completion list styled to match SSMS; keyboard-navigable (↑/↓ to move, Tab/Enter to accept, Esc to dismiss)
+- **SSMS-style popup** — custom WPF completion list; keyboard-navigable (↑/↓ to move, Tab/Enter to accept, Esc to dismiss)
+- **Native IntelliSense suppression** — while OpenHint SQL's popup is visible, the default SSMS completion popup is dismissed to avoid overlapping suggestion lists
 - **Non-intrusive** — installs to its own `Extensions\OpenHintSQL` subfolder; never modifies SSMS core files; complete uninstaller included
 
 ---
@@ -31,7 +34,7 @@ OpenHint SQL targets SSMS 18 through SSMS 22.
 | 21.x | 64-bit | Supported by VSIX manifest and install script |
 | 22.x | 64-bit | Supported; smoke-tested on SSMS 22 |
 
-`install.bat` and the installer auto-detect installed SSMS 18/19/20/21/22 instances and install into every detected version in one pass. SSMS 18-20 use the 32-bit VS isolated shell; SSMS 21-22 use the 64-bit VS 2022 shell.
+`INSTALL.bat` and the installer auto-detect installed SSMS 18/19/20/21/22 instances and install into every detected version in one pass. SSMS 18-20 use the 32-bit VS isolated shell; SSMS 21-22 use the 64-bit VS 2022 shell.
 
 ---
 
@@ -57,10 +60,10 @@ cd OpenHint-SQL
 dotnet build src\OpenHintSQL\OpenHintSQL.csproj -c Release
 
 REM Install to all detected SSMS versions (run as Administrator)
-install.bat
+INSTALL.bat
 
 REM Install to a specific version only
-install.bat 20
+INSTALL.bat 20
 ```
 
 ---
@@ -78,9 +81,12 @@ The popup opens automatically as you type. Navigation: `↑`/`↓` to move, `Tab
 | After `SELECT `, `WHERE `, `ORDER BY `, `GROUP BY ` | Columns of tables already referenced in the query |
 | After `alias.` | Columns of the resolved table |
 | After `EXEC ` | Stored procedures and functions |
+| After `USE ` | Databases visible on the active server |
 | Anywhere else | T-SQL keywords, functions, and snippet shortcuts |
 
-On first use after opening SSMS, the schema loads from the disk cache (instant) or fetches live from the server in the background. The popup refreshes automatically when loading completes.
+Accepting a table or view inserts the fully qualified bracketed name, for example `[dbo].[Collections]`. Accepting a database after `USE ` inserts `[DatabaseName]`.
+
+On first use after opening SSMS, schema metadata loads from the disk cache (instant) or fetches live from the server in the background. Database-name suggestions are cached in memory per server connection. The popup refreshes automatically when loading completes.
 
 ### Snippets
 
@@ -178,13 +184,26 @@ Edit `Config\snippets.json` in the extension directory (or in `src\OpenHintSQL\C
 
 ---
 
+## Privacy and security
+
+OpenHint SQL runs entirely inside SSMS on your machine. It does not send telemetry, query text, schema names, connection details, or credentials to any external service.
+
+The extension reads the active SSMS query-window connection and uses normal SQL metadata queries:
+
+- `sys.objects`, `sys.columns`, `sys.types`, `sys.indexes`, and `sys.foreign_keys` for table/column/procedure/JOIN metadata
+- `sys.databases` for `USE` database suggestions
+
+Connection strings are only used locally to query metadata. Cache keys hash connection identity so credentials are not written to logs or cache filenames.
+
+---
+
 ## Architecture
 
 ```
 src/OpenHintSQL/
 ├── Completion/
 │   ├── CompletionCommandFilter.cs       # Intercepts keystrokes; triggers popup; expands snippets
-│   ├── CompletionEngine.cs              # Orchestrates keyword / snippet / schema results by context
+│   ├── CompletionEngine.cs              # Orchestrates keyword / snippet / metadata results by context
 │   └── CompletionViewCreationListener.cs  # MEF entry point; attaches filter to each SQL editor view;
 │                                           #   kicks off eager schema preload on view creation
 ├── Context/
@@ -192,9 +211,12 @@ src/OpenHintSQL/
 │                                         #   dot-context, clause-at-caret detection
 ├── Schema/
 │   ├── AsyncSchemaLoader.cs             # 4-resultset ADO.NET query: tables, columns, procs, PKs, FKs
+│   ├── AsyncDatabaseLoader.cs           # Server-level sys.databases query for USE completion
 │   ├── SchemaCache.cs                   # Thread-safe in-memory cache; fires OnSchemaLoaded for refresh
+│   ├── DatabaseListCache.cs             # Thread-safe in-memory database-list cache
 │   ├── SchemaPersister.cs               # JSON disk cache in %LocalAppData%\OpenHintSQL\; 24h TTL
 │   ├── DatabaseSchema.cs                # In-memory model; trie index; resolves FK string rows to refs
+│   ├── DatabaseList.cs                  # In-memory database list model
 │   ├── TrieIndex.cs                     # Prefix trie for O(prefix-length) autocomplete lookup
 │   └── TableInfo / ColumnInfo / ForeignKeyInfo / ProcedureInfo
 ├── Connection/
@@ -207,7 +229,7 @@ src/OpenHintSQL/
 │   ├── SnippetProvider.cs               # Loads snippets.json; O(1) shortcut lookup
 │   └── SnippetDefinition.cs
 ├── UI/
-│   └── CompletionPopup.cs               # Custom WPF popup; dark-themed; virtualized ListBox;
+│   └── CompletionPopup.cs               # Custom WPF popup; virtualized ListBox;
 │                                         #   WS_EX_NOACTIVATE prevents focus stealing from editor
 └── Utils/
     ├── Logger.cs                        # VS Output Window pane "OpenHint SQL"
@@ -221,10 +243,14 @@ The extension registers as a **VSPackage** (`OpenHintSQLPackage`) with `[Provide
 ### Schema disk cache
 
 ```
-%LocalAppData%\OpenHintSQL\schemacache\<6-char-hash>.json
+%LocalAppData%\OpenHintSQL\schemacache\<12-char-hash>.json
 ```
 
-Keyed by SHA-1 of `server|database`. Stores tables, columns (with PK flags), procs, and raw FK rows. On load, `DatabaseSchema.Build()` reconstructs the trie and resolves FK references. Invalidated after 24 hours or via `SchemaCache.RefreshAsync`.
+Keyed by SHA-1 of `server|database|connection-fingerprint`. Stores tables, columns (with PK flags), procs, and raw FK rows. On load, `DatabaseSchema.Build()` reconstructs the trie and resolves FK references. Invalidated after 24 hours or via `SchemaCache.RefreshAsync`.
+
+### Database list cache
+
+Database names for `USE` completion are cached in memory for 5 minutes per `server|connection-fingerprint`. The active database is removed from the fingerprint, so changing the query window's current database does not split the server-level database list cache.
 
 > **Note for contributors:** All Newtonsoft.Json usage is confined to method bodies in `SchemaPersister.cs`. Do not add `[JsonIgnore]` or other Newtonsoft attributes to schema POCOs — type-level Newtonsoft references cause early MEF/VSPackage assembly load failures in SSMS because Newtonsoft.Json is not on the IDE root probe path at startup.
 
@@ -235,18 +261,36 @@ Keyed by SHA-1 of `server|database`. Stores tables, columns (with PK flags), pro
 **No "OpenHint SQL" pane in the Output window / popup never appears**
 
 1. Confirm the DLL is in place: `<SSMS IDE dir>\Extensions\OpenHintSQL\OpenHintSQL.dll`
-2. Re-run `install.bat` as Administrator — this rebuilds the extension and MEF caches.
+2. Re-run `INSTALL.bat` as Administrator — this rebuilds the extension and MEF caches.
 3. For a detailed load error, start SSMS with the activity log:
    ```cmd
    "C:\Program Files (x86)\Microsoft SQL Server Management Studio 20\Common7\IDE\Ssms.exe" /log
    ```
    Open `%AppData%\Microsoft\SQL Server Management Studio\20.0_IsoShell\ActivityLog.xml` and search for `OpenHintSQL`.
+4. Extension logs are also written to:
+   ```text
+   %LocalAppData%\OpenHintSQL\OpenHintSQL.log
+   ```
 
 **Tables or columns don't appear**
 
 1. Confirm the query window has an active database connection.
 2. Check the Output pane for `Connection obtained: <server>/<db>` and `Schema cached for [...]: N tables`.
 3. If you see `ScriptFactory is null`, the SSMS connection API couldn't be reached — try opening a new query window while connected to a database in Object Explorer.
+
+**Database names don't appear after `USE `**
+
+1. Confirm the query window is connected to the server whose databases you want to list.
+2. The active login must have permission to see databases in `sys.databases`.
+3. Check the Output pane or `%LocalAppData%\OpenHintSQL\OpenHintSQL.log` for `Database list loaded: N database(s)` or a database-list load error.
+
+**Connection timeout when using `runas /netonly` or customer VPN**
+
+OpenHint SQL uses the active SSMS connection identity. For integrated-security connections, including common `runas /netonly` workflows, the extension uses a 60-second connection timeout for metadata loading because VPN/domain authentication can be slow.
+
+**The default SSMS IntelliSense popup overlaps OpenHint SQL**
+
+OpenHint SQL actively dismisses native SSMS completion sessions while its own popup is visible. If overlap still happens on a specific SSMS build, include the SSMS version and a screenshot in the issue.
 
 **Schema is stale after a table was added**
 
@@ -265,7 +309,7 @@ Pull requests are welcome. Please open an issue first for any significant featur
 - Target **.NET Framework 4.8** (required by SSMS)
 - Keep **Newtonsoft.Json usage inside method bodies only** — see the note in the Architecture section
 - All `async` code that touches SSMS APIs must marshal to the UI thread via `Dispatcher.BeginInvoke` or `JoinableTaskFactory.SwitchToMainThreadAsync`
-- Test against at least two SSMS versions (e.g. 18 and 20)
+- Test against at least one 32-bit SSMS version (18-20) and one 64-bit SSMS version (21-22) when possible
 
 ---
 
