@@ -54,15 +54,23 @@ namespace OpenHintSQL.Completion
                 var context = SqlContextParser.GetContext(fullText, caretOffset);
                 bool emptyPrefix = string.IsNullOrEmpty(prefix);
                 bool inDotContext = SqlContextParser.GetTableContext(fullText, caretOffset) != null;
+                bool inUseDatabasePosition = context == SqlContext.UseDatabase &&
+                    IsUseDatabasePosition(fullText, caretOffset);
 
                 // Empty-prefix is only valid in "strong" clause contexts (immediate-on-space
-                // after FROM/JOIN/EXEC) or right after a dot (alias-qualified column list).
+                // after FROM/JOIN/EXEC/USE) or right after a dot (alias-qualified column list).
                 if (emptyPrefix && !IsStrongClauseContext(context) && !inDotContext)
                     return new List<CompletionItemData>();
 
                 Logger.Log($"CompletionEngine: prefix='{prefix}', context={context}, server='{server}', db='{database}'");
 
                 var results = new List<CompletionItemData>();
+
+                if (inUseDatabasePosition)
+                {
+                    AddDatabaseMatches(results, prefix, server, connectionString);
+                    return SortAndLimit(results, prefix);
+                }
 
                 // Keyword/snippet matches are noise when the user hasn't typed a prefix —
                 // in that case only schema items make sense.
@@ -278,6 +286,120 @@ namespace OpenHintSQL.Completion
             return description.Length <= 180
                 ? description
                 : description.Substring(0, 177) + "...";
+        }
+
+        private static void AddDatabaseMatches(
+            List<CompletionItemData> results,
+            string prefix,
+            string server,
+            string connectionString)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(server))
+                {
+                    results.Add(BuildStatusItem(
+                        "No active server connection",
+                        "Connect the query window to enable database suggestions"));
+                    return;
+                }
+
+                if (string.IsNullOrEmpty(connectionString))
+                {
+                    results.Add(BuildStatusItem(
+                        "Connection details unavailable",
+                        "Open a connected query window and try again"));
+                    return;
+                }
+
+                var databases = DatabaseListCache.GetOrLoad(server, connectionString);
+                if (databases == null || !databases.IsLoaded)
+                {
+                    var loadError = DatabaseListCache.GetLastLoadError(server, connectionString);
+                    if (!string.IsNullOrWhiteSpace(loadError))
+                    {
+                        results.Add(BuildStatusItem(
+                            "Database list load failed",
+                            ShortenStatusDescription(loadError)));
+                    }
+                    else
+                    {
+                        results.Add(BuildStatusItem(
+                            "Loading databases...",
+                            server));
+                    }
+                    return;
+                }
+
+                if (databases.Names.Count == 0)
+                {
+                    results.Add(BuildStatusItem(
+                        "No databases found",
+                        "The active login cannot see any online databases on this server"));
+                    return;
+                }
+
+                foreach (var name in databases.Names)
+                {
+                    if (MatchesPrefix(name, prefix))
+                        results.Add(BuildDatabaseItem(name));
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("AddDatabaseMatches failed", ex);
+            }
+        }
+
+        private static CompletionItemData BuildDatabaseItem(string databaseName)
+        {
+            var bracketedName = QuoteIdentifier(databaseName);
+            return new CompletionItemData
+            {
+                Text = databaseName,
+                InsertText = bracketedName,
+                Description = $"Database: {bracketedName}",
+                Kind = CompletionItemKind.Database,
+                Priority = 30,
+                IconKey = "Database"
+            };
+        }
+
+        private static string QuoteIdentifier(string identifier)
+        {
+            return $"[{(identifier ?? string.Empty).Replace("]", "]]")}]";
+        }
+
+        private static bool IsUseDatabasePosition(string fullText, int caretOffset)
+        {
+            if (string.IsNullOrEmpty(fullText) || caretOffset <= 0)
+                return false;
+
+            int pos = Math.Min(caretOffset, fullText.Length) - 1;
+
+            while (pos >= 0 && IsDatabaseNameFragmentChar(fullText[pos]))
+                pos--;
+
+            if (pos < 0 || !char.IsWhiteSpace(fullText[pos]))
+                return false;
+
+            while (pos >= 0 && char.IsWhiteSpace(fullText[pos]))
+                pos--;
+
+            const string keyword = "USE";
+            int start = pos - keyword.Length + 1;
+            if (start < 0)
+                return false;
+
+            if (!string.Equals(fullText.Substring(start, keyword.Length), keyword, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return start == 0 || !IsDatabaseNameFragmentChar(fullText[start - 1]);
+        }
+
+        private static bool IsDatabaseNameFragmentChar(char c)
+        {
+            return char.IsLetterOrDigit(c) || c == '_' || c == '@' || c == '#' || c == '[' || c == ']';
         }
 
         private static bool ContextNeedsSchema(SqlContext context)
@@ -777,7 +899,7 @@ namespace OpenHintSQL.Completion
         /// <summary>
         /// True when the context warrants opening the popup with no prefix typed —
         /// i.e. the user has just hit space after a clause keyword and we have a
-        /// useful schema-driven list to show (tables, columns, or procedures).
+        /// useful metadata-driven list to show (tables, columns, procedures, or databases).
         /// </summary>
         private static bool IsStrongClauseContext(SqlContext context)
         {
@@ -795,6 +917,7 @@ namespace OpenHintSQL.Completion
                 case SqlContext.HavingClause:
                 case SqlContext.SetClause:
                 case SqlContext.Exec:
+                case SqlContext.UseDatabase:
                     return true;
                 default:
                     return false;

@@ -40,6 +40,8 @@ namespace OpenHintSQL.Context
         AlterTable,
         /// <summary>After EXEC/EXECUTE — expecting procedure name.</summary>
         Exec,
+        /// <summary>After USE - expecting a database name.</summary>
+        UseDatabase,
         /// <summary>After DECLARE — expecting variable declaration.</summary>
         DeclareVariable,
         /// <summary>At the top level, not inside any particular clause.</summary>
@@ -113,6 +115,7 @@ namespace OpenHintSQL.Context
             ("ON",      SqlContext.OnClause),
             ("EXEC",    SqlContext.Exec),
             ("EXECUTE", SqlContext.Exec),
+            ("USE",     SqlContext.UseDatabase),
             ("DECLARE", SqlContext.DeclareVariable),
         };
 

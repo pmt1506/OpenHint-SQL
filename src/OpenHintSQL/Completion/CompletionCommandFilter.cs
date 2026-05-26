@@ -74,6 +74,8 @@ namespace OpenHintSQL.Completion
             // what makes the very first table-completion attempt work after a cold cache.
             SchemaCache.OnSchemaLoaded += OnSchemaReady;
             SchemaCache.OnSchemaLoadFailed += OnSchemaLoadFailed;
+            DatabaseListCache.OnDatabasesLoaded += OnDatabaseListReady;
+            DatabaseListCache.OnDatabaseListLoadFailed += OnDatabaseListLoadFailed;
         }
 
         /// <summary>
@@ -87,6 +89,16 @@ namespace OpenHintSQL.Completion
         }
 
         private void OnSchemaLoadFailed(string key, string message)
+        {
+            RefreshPopupAfterSchemaLoad();
+        }
+
+        private void OnDatabaseListReady(string key, DatabaseList databases)
+        {
+            RefreshPopupAfterSchemaLoad();
+        }
+
+        private void OnDatabaseListLoadFailed(string key, string message)
         {
             RefreshPopupAfterSchemaLoad();
         }
@@ -411,6 +423,15 @@ namespace OpenHintSQL.Completion
                     // Dot trigger: alias-qualified column list, no prefix needed.
                     TriggerCompletion(allowEmptyPrefix: true);
                 }
+                else if (typedChar == '[')
+                {
+                    string fullText = _textView.GetAllText();
+                    int caretOffset = _textView.GetCaretPosition();
+                    if (SqlContextParser.GetContext(fullText, caretOffset) == SqlContext.UseDatabase)
+                        TriggerCompletion(allowEmptyPrefix: true);
+                    else
+                        DismissPopup();
+                }
                 else if (char.IsWhiteSpace(typedChar))
                 {
                     // Whitespace right after a clause keyword (FROM, JOIN, EXEC, …)
@@ -482,8 +503,14 @@ namespace OpenHintSQL.Completion
             try
             {
                 string prefix = _textView.GetWordBeforeCaret();
+                string fullText = _textView.GetAllText();
+                int caretOffset = _textView.GetCaretPosition();
+                var context = SqlContextParser.GetContext(fullText, caretOffset);
+                bool hasContextPopup = IsPopupVisible() || context == SqlContext.UseDatabase;
 
-                if (!allowEmptyPrefix && (string.IsNullOrEmpty(prefix) || prefix.Length < MinPrefixLength))
+                if (!allowEmptyPrefix &&
+                    !hasContextPopup &&
+                    (string.IsNullOrEmpty(prefix) || prefix.Length < MinPrefixLength))
                 {
                     DismissPopup();
                     return;
@@ -523,10 +550,6 @@ namespace OpenHintSQL.Completion
                 {
                     Logger.Warn($"Failed to get connection info: {ex.Message}");
                 }
-
-                // Get the full text and caret offset
-                string fullText = _textView.GetAllText();
-                int caretOffset = _textView.GetCaretPosition();
 
                 // Generate completion items
                 var items = CompletionEngine.GetCompletionItems(
@@ -726,6 +749,7 @@ namespace OpenHintSQL.Completion
             return item != null &&
                 (item.Kind == CompletionItemKind.Table ||
                  item.Kind == CompletionItemKind.View ||
+                 item.Kind == CompletionItemKind.Database ||
                  item.Kind == CompletionItemKind.JoinSuggestion);
         }
 
@@ -952,6 +976,8 @@ namespace OpenHintSQL.Completion
 
                 SchemaCache.OnSchemaLoaded -= OnSchemaReady;
                 SchemaCache.OnSchemaLoadFailed -= OnSchemaLoadFailed;
+                DatabaseListCache.OnDatabasesLoaded -= OnDatabaseListReady;
+                DatabaseListCache.OnDatabaseListLoadFailed -= OnDatabaseListLoadFailed;
 
                 if (_popup != null)
                 {
