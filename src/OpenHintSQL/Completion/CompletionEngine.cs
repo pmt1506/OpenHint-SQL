@@ -373,7 +373,7 @@ namespace OpenHintSQL.Completion
         private static CompletionItemData BuildTableItem(TableInfo t) => new CompletionItemData
         {
             Text = t.FullName,
-            InsertText = t.Name,
+            InsertText = t.BracketedName,
             Description = $"Table: {t.BracketedName}",
             Kind = CompletionItemKind.Table,
             Priority = 10,
@@ -383,7 +383,7 @@ namespace OpenHintSQL.Completion
         private static CompletionItemData BuildViewItem(TableInfo v) => new CompletionItemData
         {
             Text = v.FullName,
-            InsertText = v.Name,
+            InsertText = v.BracketedName,
             Description = $"View: {v.BracketedName}",
             Kind = CompletionItemKind.View,
             Priority = 15,
@@ -513,14 +513,13 @@ namespace OpenHintSQL.Completion
                 }
             }
 
-            // Display text shows what the user will get; InsertText excludes the leading "JOIN "
-            // because the user has already typed it (the word "JOIN" is what we replace).
-            string display = $"{targetTable.Name} {newAlias} ON {on}";
-            string insert = $"{targetTable.Name} {newAlias} ON {on}";
+            // Display text shows what the user will get; InsertText starts at the table
+            // reference because the leading JOIN keyword is preserved from the query text.
+            string display = $"{targetTable.BracketedName} {newAlias} ON {on}";
+            string insert = $"{targetTable.BracketedName} {newAlias} ON {on}";
 
-            // The CommandFilter replaces only the word-before-caret (the table-name fragment).
-            // For empty-prefix JOIN trigger, that word is empty, so InsertText is spliced
-            // at the caret position immediately after the trailing space of "JOIN ".
+            // For empty-prefix JOIN trigger, InsertText is spliced at the caret position
+            // immediately after the trailing space of "JOIN ".
             results.Add(new CompletionItemData
             {
                 Text = display,

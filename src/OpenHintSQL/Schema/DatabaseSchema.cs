@@ -139,7 +139,7 @@ namespace OpenHintSQL.Schema
                 var item = new CompletionItemData
                 {
                     Text = t.FullName,
-                    InsertText = t.Name,
+                    InsertText = t.BracketedName,
                     Description = $"Table: {t.BracketedName}",
                     Kind = CompletionItemKind.Table,
                     Priority = 10,
@@ -156,7 +156,7 @@ namespace OpenHintSQL.Schema
                 var item = new CompletionItemData
                 {
                     Text = v.FullName,
-                    InsertText = v.Name,
+                    InsertText = v.BracketedName,
                     Description = $"View: {v.BracketedName}",
                     Kind = CompletionItemKind.View,
                     Priority = 15,

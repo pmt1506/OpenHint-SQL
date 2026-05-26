@@ -38,6 +38,11 @@ namespace OpenHintSQL.Schema
         public string FullName => $"{SchemaName}.{Name}";
 
         /// <summary>Bracket-escaped full name (e.g. [dbo].[Customers]).</summary>
-        public string BracketedName => $"[{SchemaName}].[{Name}]";
+        public string BracketedName => $"{QuoteIdentifier(SchemaName)}.{QuoteIdentifier(Name)}";
+
+        private static string QuoteIdentifier(string identifier)
+        {
+            return $"[{(identifier ?? string.Empty).Replace("]", "]]")}]";
+        }
     }
 }

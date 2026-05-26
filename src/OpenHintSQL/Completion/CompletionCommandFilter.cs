@@ -675,13 +675,15 @@ namespace OpenHintSQL.Completion
                 if (string.IsNullOrEmpty(insertText))
                     return;
 
-                int wordStart = _textView.GetWordBeforeCaretStart();
                 int caretPos = _textView.GetCaretPosition();
-                int wordLength = caretPos - wordStart;
+                int replaceStart = IsObjectReferenceCompletion(item)
+                    ? GetObjectReferenceBeforeCaretStart(caretPos)
+                    : _textView.GetWordBeforeCaretStart();
+                int wordLength = caretPos - replaceStart;
 
                 if (wordLength >= 0)
                 {
-                    _textView.ReplaceSpan(wordStart, wordLength, insertText);
+                    _textView.ReplaceSpan(replaceStart, wordLength, insertText);
                 }
 
                 Logger.Log($"Inserted completion: '{insertText}'");
@@ -695,6 +697,42 @@ namespace OpenHintSQL.Completion
         // ═══════════════════════════════════════════════════════════════
         //  HELPERS
         // ═══════════════════════════════════════════════════════════════
+
+        private int GetObjectReferenceBeforeCaretStart(int caretPos)
+        {
+            try
+            {
+                var snapshot = _textView?.TextSnapshot;
+                if (snapshot == null)
+                    return _textView.GetWordBeforeCaretStart();
+
+                int start = Math.Min(Math.Max(caretPos, 0), snapshot.Length);
+                while (start > 0 && IsObjectReferencePrefixChar(snapshot[start - 1]))
+                {
+                    start--;
+                }
+
+                return start;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"GetObjectReferenceBeforeCaretStart failed: {ex.Message}");
+                return _textView.GetWordBeforeCaretStart();
+            }
+        }
+
+        private static bool IsObjectReferenceCompletion(CompletionItemData item)
+        {
+            return item != null &&
+                (item.Kind == CompletionItemKind.Table ||
+                 item.Kind == CompletionItemKind.View ||
+                 item.Kind == CompletionItemKind.JoinSuggestion);
+        }
+
+        private static bool IsObjectReferencePrefixChar(char c)
+        {
+            return char.IsLetterOrDigit(c) || c == '_' || c == '.' || c == '[' || c == ']';
+        }
 
         /// <summary>
         /// Extracts the typed character from the pvaIn marshal pointer.
