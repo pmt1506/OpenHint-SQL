@@ -72,6 +72,15 @@ namespace OpenHintSQL.Completion
                     return SortAndLimit(results, prefix);
                 }
 
+                // In table/object positions, keep the popup focused on database objects.
+                // Keywords and snippets here are syntactic noise once the user is choosing
+                // a FROM/JOIN/UPDATE/INSERT target.
+                if (!inDotContext && IsTableObjectContext(context, fullText, caretOffset))
+                {
+                    AddSchemaMatches(results, prefix, context, fullText, caretOffset, server, database, connectionString);
+                    return SortAndLimit(results, prefix);
+                }
+
                 // Keyword/snippet matches are noise when the user hasn't typed a prefix —
                 // in that case only schema items make sense.
                 if (!emptyPrefix)
@@ -224,7 +233,7 @@ namespace OpenHintSQL.Completion
 
                     case SqlContext.JoinClause:
                         // FK-aware JOIN suggestions float above generic table matches.
-                        AddJoinSuggestions(results, schema, fullText, caretOffset);
+                        AddJoinSuggestions(results, schema, fullText, caretOffset, prefix);
                         AddTablesAndViews(results, schema, prefix);
                         break;
 
@@ -546,7 +555,8 @@ namespace OpenHintSQL.Completion
             List<CompletionItemData> results,
             DatabaseSchema schema,
             string fullText,
-            int caretOffset)
+            int caretOffset,
+            string prefix)
         {
             try
             {
@@ -577,14 +587,14 @@ namespace OpenHintSQL.Completion
                     foreach (var fk in scopedRef.Table.ForeignKeys)
                     {
                         EmitJoinSuggestion(results, fk, scopedRef, fk.ReferencedTable,
-                            fkParentIsScoped: true, usedAliases, emittedTargets);
+                            fkParentIsScoped: true, usedAliases, emittedTargets, prefix);
                     }
 
                     // Incoming FKs: other tables have FKs to this scoped table.
                     foreach (var fk in scopedRef.Table.IncomingForeignKeys)
                     {
                         EmitJoinSuggestion(results, fk, scopedRef, fk.ParentTable,
-                            fkParentIsScoped: false, usedAliases, emittedTargets);
+                            fkParentIsScoped: false, usedAliases, emittedTargets, prefix);
                     }
                 }
             }
@@ -601,9 +611,14 @@ namespace OpenHintSQL.Completion
             TableInfo targetTable,
             bool fkParentIsScoped,
             HashSet<string> usedAliases,
-            HashSet<string> emittedTargets)
+            HashSet<string> emittedTargets,
+            string prefix)
         {
             if (targetTable == null || ReferenceEquals(targetTable, scopedRef.Table))
+                return;
+            if (!MatchesPrefix(targetTable.FullName, prefix) &&
+                !MatchesPrefix(targetTable.Name, prefix) &&
+                !MatchesPrefix(targetTable.BracketedName, prefix))
                 return;
 
             // First-FK-wins per target: avoid showing both Customers→Orders and Orders→Customers.
@@ -924,6 +939,21 @@ namespace OpenHintSQL.Completion
             }
         }
 
+        private static bool IsTableObjectContext(SqlContext context, string fullText, int caretOffset)
+        {
+            switch (context)
+            {
+                case SqlContext.FromClause:
+                case SqlContext.JoinClause:
+                case SqlContext.UpdateTarget:
+                    return true;
+                case SqlContext.InsertColumns:
+                    return ParenDepthAfterContextKeyword(fullText, caretOffset) == 0;
+                default:
+                    return false;
+            }
+        }
+
         /// <summary>
         /// Checks if a name matches the given prefix (case-insensitive).
         /// An empty prefix matches every name — callers use that to enumerate.
@@ -992,15 +1022,69 @@ namespace OpenHintSQL.Completion
 
             // Sort: exact prefix match first → priority desc → alphabetical
             var sorted = deduplicated
-                .OrderByDescending(item =>
-                    item.Text != null && item.Text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                        ? 1 : 0)
+                .OrderByDescending(item => GetPrefixRelevance(item, prefix))
                 .ThenByDescending(item => item.Priority)
                 .ThenBy(item => item.Text, StringComparer.OrdinalIgnoreCase)
                 .Take(MaxResults)
                 .ToList();
 
             return sorted;
+        }
+
+        private static int GetPrefixRelevance(CompletionItemData item, string prefix)
+        {
+            if (item == null || string.IsNullOrEmpty(prefix))
+                return 0;
+
+            var candidates = new[]
+            {
+                item.Text,
+                item.InsertText,
+                ExtractObjectName(item.Text),
+                ExtractObjectName(item.InsertText)
+            };
+
+            foreach (var candidate in candidates)
+            {
+                if (string.Equals(candidate, prefix, StringComparison.OrdinalIgnoreCase))
+                    return 4;
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (!string.IsNullOrEmpty(candidate) &&
+                    candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return 3;
+                }
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (!string.IsNullOrEmpty(candidate) &&
+                    candidate.IndexOf(prefix, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return 1;
+                }
+            }
+
+            return 0;
+        }
+
+        private static string ExtractObjectName(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return text;
+
+            var firstToken = text.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, 2)[0];
+            var lastDot = firstToken.LastIndexOf('.');
+            if (lastDot >= 0 && lastDot < firstToken.Length - 1)
+                firstToken = firstToken.Substring(lastDot + 1);
+
+            if (firstToken.Length >= 2 && firstToken[0] == '[' && firstToken[firstToken.Length - 1] == ']')
+                firstToken = firstToken.Substring(1, firstToken.Length - 2).Replace("]]", "]");
+
+            return firstToken;
         }
     }
 }
