@@ -181,9 +181,19 @@ namespace OpenHintSQL.Completion
                 {
                     if (ContextNeedsSchema(context))
                     {
-                        results.Add(BuildStatusItem(
-                            "Loading database schema...",
-                            $"{server} / {database}"));
+                        var loadError = SchemaCache.GetLastLoadError(server, database, connectionString);
+                        if (!string.IsNullOrWhiteSpace(loadError))
+                        {
+                            results.Add(BuildStatusItem(
+                                "Schema load failed",
+                                ShortenStatusDescription(loadError)));
+                        }
+                        else
+                        {
+                            results.Add(BuildStatusItem(
+                                "Loading database schema...",
+                                $"{server} / {database}"));
+                        }
                     }
                     return;
                 }
@@ -257,6 +267,17 @@ namespace OpenHintSQL.Completion
                 Priority = 1000,
                 IconKey = "Status"
             };
+        }
+
+        private static string ShortenStatusDescription(string description)
+        {
+            if (string.IsNullOrWhiteSpace(description))
+                return "Check the OpenHint SQL output log for details";
+
+            description = description.Replace(Environment.NewLine, " ").Trim();
+            return description.Length <= 180
+                ? description
+                : description.Substring(0, 177) + "...";
         }
 
         private static bool ContextNeedsSchema(SqlContext context)

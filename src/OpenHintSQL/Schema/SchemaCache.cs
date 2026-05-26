@@ -17,6 +17,7 @@ namespace OpenHintSQL.Schema
     {
         /// <summary>Cache TTL — schemas older than this are considered stale.</summary>
         private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan FailureRetryDelay = TimeSpan.FromSeconds(15);
 
         /// <summary>Cached schemas keyed by "server|database|connection-fingerprint".</summary>
         private static readonly ConcurrentDictionary<string, DatabaseSchema> _cache
@@ -26,11 +27,22 @@ namespace OpenHintSQL.Schema
         private static readonly ConcurrentDictionary<string, Task> _loadingTasks
             = new ConcurrentDictionary<string, Task>(StringComparer.OrdinalIgnoreCase);
 
+        private static readonly ConcurrentDictionary<string, SchemaLoadFailure> _loadFailures
+            = new ConcurrentDictionary<string, SchemaLoadFailure>(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>
         /// Raised when a schema finishes loading in the background.
         /// Parameters: cache key (server|database|connection-fingerprint), loaded schema.
         /// </summary>
         public static event Action<string, DatabaseSchema> OnSchemaLoaded;
+
+        public static event Action<string, string> OnSchemaLoadFailed;
+
+        private sealed class SchemaLoadFailure
+        {
+            public string Message { get; set; }
+            public DateTime FailedAt { get; set; }
+        }
 
         /// <summary>
         /// Gets the cached schema for the given server/database, or returns
@@ -61,6 +73,9 @@ namespace OpenHintSQL.Schema
             }
 
             // Cache miss — fire background load and return Empty immediately
+            if (TryGetRecentFailure(key, out _))
+                return DatabaseSchema.Empty;
+
             Logger.Log($"Schema cache miss for [{key}], starting background load");
             StartBackgroundLoad(key, connectionString, allowDiskCache: true);
             return DatabaseSchema.Empty;
@@ -76,6 +91,7 @@ namespace OpenHintSQL.Schema
             Logger.Log($"Manual schema refresh requested for [{key}]");
 
             _cache.TryRemove(key, out _);
+            _loadFailures.TryRemove(key, out _);
             SchemaPersister.Invalidate(key);
 
             return LoadSchemaAsync(key, connectionString, allowDiskCache: false);
@@ -88,7 +104,14 @@ namespace OpenHintSQL.Schema
         {
             _cache.Clear();
             _loadingTasks.Clear();
+            _loadFailures.Clear();
             Logger.Log("Schema cache cleared");
+        }
+
+        public static string GetLastLoadError(string server, string database, string connectionString)
+        {
+            var key = BuildKey(server, database, connectionString);
+            return TryGetRecentFailure(key, out var failure) ? failure.Message : null;
         }
 
         /// <summary>
@@ -99,6 +122,8 @@ namespace OpenHintSQL.Schema
             // Use GetOrAdd to ensure only one load per key
             _loadingTasks.GetOrAdd(key, k =>
             {
+                _loadFailures.TryRemove(k, out _);
+
                 return Task.Run(async () =>
                 {
                     try
@@ -108,6 +133,7 @@ namespace OpenHintSQL.Schema
                     catch (Exception ex)
                     {
                         Logger.Error($"Background schema load failed for [{k}]", ex);
+                        RecordLoadFailure(k, ex.Message);
                     }
                     finally
                     {
@@ -135,6 +161,7 @@ namespace OpenHintSQL.Schema
                 if (fromDisk != null && fromDisk.IsLoaded)
                 {
                     _cache[key] = fromDisk;
+                    _loadFailures.TryRemove(key, out _);
                     NotifySchemaLoaded(key, fromDisk);
                     return;
                 }
@@ -147,6 +174,7 @@ namespace OpenHintSQL.Schema
             if (schema.IsLoaded)
             {
                 _cache[key] = schema;
+                _loadFailures.TryRemove(key, out _);
                 Logger.Log($"Schema cached for [{key}]: " +
                            $"{schema.Tables.Count} tables, " +
                            $"{schema.Views.Count} views, " +
@@ -160,7 +188,37 @@ namespace OpenHintSQL.Schema
             else
             {
                 Logger.Warn($"Schema load returned empty/failed for [{key}]");
+                RecordLoadFailure(key, schema.LoadError);
             }
+        }
+
+        private static bool TryGetRecentFailure(string key, out SchemaLoadFailure failure)
+        {
+            if (_loadFailures.TryGetValue(key, out failure))
+            {
+                if ((DateTime.UtcNow - failure.FailedAt) < FailureRetryDelay)
+                    return true;
+
+                _loadFailures.TryRemove(key, out _);
+            }
+
+            failure = null;
+            return false;
+        }
+
+        private static void RecordLoadFailure(string key, string message)
+        {
+            var safeMessage = string.IsNullOrWhiteSpace(message)
+                ? "Could not connect to the active database"
+                : message;
+
+            _loadFailures[key] = new SchemaLoadFailure
+            {
+                Message = safeMessage,
+                FailedAt = DateTime.UtcNow
+            };
+
+            NotifySchemaLoadFailed(key, safeMessage);
         }
 
         private static void NotifySchemaLoaded(string key, DatabaseSchema schema)
@@ -172,6 +230,18 @@ namespace OpenHintSQL.Schema
             catch (Exception ex)
             {
                 Logger.Error("Error in OnSchemaLoaded handler", ex);
+            }
+        }
+
+        private static void NotifySchemaLoadFailed(string key, string message)
+        {
+            try
+            {
+                OnSchemaLoadFailed?.Invoke(key, message);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Error in OnSchemaLoadFailed handler", ex);
             }
         }
 

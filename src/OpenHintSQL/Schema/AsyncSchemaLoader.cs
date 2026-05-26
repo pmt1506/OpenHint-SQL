@@ -229,6 +229,7 @@ ORDER BY fk.name, fkc.constraint_column_id;
             catch (Exception ex)
             {
                 Logger.Error("Failed to load database schema", ex);
+                schema.LoadError = ex.Message;
                 // Return whatever we managed to load (possibly empty)
             }
 

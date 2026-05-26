@@ -64,6 +64,7 @@ namespace OpenHintSQL.Completion
             // Refresh the popup once the schema finishes loading in the background — this is
             // what makes the very first table-completion attempt work after a cold cache.
             SchemaCache.OnSchemaLoaded += OnSchemaReady;
+            SchemaCache.OnSchemaLoadFailed += OnSchemaLoadFailed;
         }
 
         /// <summary>
@@ -72,6 +73,16 @@ namespace OpenHintSQL.Completion
         /// loaded tables show up without the user having to type more.
         /// </summary>
         private void OnSchemaReady(string key, DatabaseSchema schema)
+        {
+            RefreshPopupAfterSchemaLoad();
+        }
+
+        private void OnSchemaLoadFailed(string key, string message)
+        {
+            RefreshPopupAfterSchemaLoad();
+        }
+
+        private void RefreshPopupAfterSchemaLoad()
         {
             try
             {
@@ -99,7 +110,7 @@ namespace OpenHintSQL.Completion
             }
             catch (Exception ex)
             {
-                Logger.Error("OnSchemaReady failed", ex);
+                Logger.Error("Schema load popup refresh failed", ex);
             }
         }
 
@@ -474,7 +485,9 @@ namespace OpenHintSQL.Completion
                 // need a fresh query — they swap the popup's contents entirely.
                 if (IsPopupVisible() && !string.IsNullOrEmpty(prefix) && !_popup.IsShowingStatus)
                 {
+                    DismissNativeCompletionPopup();
                     _popup.UpdateFilter(prefix);
+                    QueueDismissNativeCompletionPopup();
 
                     if (_popup.SelectedItem == null && !_popup.HasItems)
                     {
@@ -515,7 +528,9 @@ namespace OpenHintSQL.Completion
 
                 if (items != null && items.Count > 0)
                 {
+                    DismissNativeCompletionPopup();
                     _popup.Show(_textView, items);
+                    QueueDismissNativeCompletionPopup();
                 }
                 else
                 {
@@ -722,6 +737,39 @@ namespace OpenHintSQL.Completion
             }
         }
 
+        private void DismissNativeCompletionPopup()
+        {
+            try
+            {
+                if (NextTarget == null)
+                    return;
+
+                var cmdGroup = VSConstants.VSStd2K;
+                uint cmdId = (uint)VSConstants.VSStd2KCmdID.CANCEL;
+                NextTarget.Exec(ref cmdGroup, cmdId, 0, IntPtr.Zero, IntPtr.Zero);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Could not dismiss native completion popup: {ex.Message}");
+            }
+        }
+
+        private void QueueDismissNativeCompletionPopup()
+        {
+            try
+            {
+                var dispatcher = _textView?.VisualElement?.Dispatcher;
+                if (dispatcher == null)
+                    return;
+
+                dispatcher.BeginInvoke(new Action(DismissNativeCompletionPopup));
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Could not queue native completion dismiss: {ex.Message}");
+            }
+        }
+
         /// <summary>
         /// Passes the command to the next target in the command chain.
         /// </summary>
@@ -770,6 +818,7 @@ namespace OpenHintSQL.Completion
                 DismissPopup();
 
                 SchemaCache.OnSchemaLoaded -= OnSchemaReady;
+                SchemaCache.OnSchemaLoadFailed -= OnSchemaLoadFailed;
 
                 if (_popup != null)
                 {

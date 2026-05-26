@@ -72,6 +72,11 @@ namespace OpenHintSQL.Schema
         public DateTime LoadedAt { get; set; }
 
         /// <summary>
+        /// Last load error for an unloaded schema, if a live server query failed.
+        /// </summary>
+        public string LoadError { get; set; }
+
+        /// <summary>
         /// Trie index for fast prefix search across all object names (tables, views, procs).
         /// </summary>
         private readonly TrieIndex<CompletionItemData> _trieIndex = new TrieIndex<CompletionItemData>();

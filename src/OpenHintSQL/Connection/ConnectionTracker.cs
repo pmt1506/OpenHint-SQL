@@ -231,6 +231,17 @@ namespace OpenHintSQL.Connection
             if (string.IsNullOrEmpty(database))
                 database = "master";
 
+            var userName = GetPropertyValue(uiConnInfo, "UserName") as string;
+            var password = GetPropertyValue(uiConnInfo, "Password") as string;
+            var authenticationType = Convert.ToString(GetPropertyValue(uiConnInfo, "AuthenticationType"));
+            bool hasAuthenticationHints = uiConnInfo != null &&
+                (!string.IsNullOrWhiteSpace(userName) ||
+                 !string.IsNullOrWhiteSpace(password) ||
+                 !string.IsNullOrWhiteSpace(authenticationType));
+            bool shouldUseIntegratedSecurity = ShouldUseIntegratedSecurity(userName, password, authenticationType);
+            int connectTimeout = shouldUseIntegratedSecurity ? 60 : 10;
+            Logger.Log($"Connection auth hint: type='{(string.IsNullOrWhiteSpace(authenticationType) ? "<empty>" : authenticationType)}', hasUser={!string.IsNullOrWhiteSpace(userName)}, hasPassword={!string.IsNullOrEmpty(password)}");
+
             if (!string.IsNullOrWhiteSpace(connectionString))
             {
                 try
@@ -240,8 +251,12 @@ namespace OpenHintSQL.Connection
                         DataSource = server,
                         InitialCatalog = database,
                         ApplicationName = "OpenHintSQL",
-                        ConnectTimeout = 10
+                        ConnectTimeout = connectTimeout
                     };
+
+                    if (hasAuthenticationHints)
+                        ApplyAuthentication(existing, shouldUseIntegratedSecurity, userName, password);
+                    Logger.Log($"Connection auth mode: {(existing.IntegratedSecurity ? "Windows Integrated" : "SQL/User")}");
 
                     return new ConnectionInfo
                     {
@@ -256,27 +271,16 @@ namespace OpenHintSQL.Connection
                 }
             }
 
-            var userName = GetPropertyValue(uiConnInfo, "UserName") as string;
-            var password = GetPropertyValue(uiConnInfo, "Password") as string;
-            var authenticationType = Convert.ToString(GetPropertyValue(uiConnInfo, "AuthenticationType"));
             var builder = new SqlConnectionStringBuilder
             {
                 DataSource = server,
                 InitialCatalog = database,
                 ApplicationName = "OpenHintSQL",
-                ConnectTimeout = 10
+                ConnectTimeout = connectTimeout
             };
 
-            if (ShouldUseIntegratedSecurity(userName, password, authenticationType))
-            {
-                builder.IntegratedSecurity = true;
-            }
-            else
-            {
-                builder.IntegratedSecurity = false;
-                builder.UserID = userName;
-                builder.Password = password;
-            }
+            ApplyAuthentication(builder, shouldUseIntegratedSecurity, userName, password);
+            Logger.Log($"Connection auth mode: {(builder.IntegratedSecurity ? "Windows Integrated" : "SQL/User")}");
 
             return new ConnectionInfo
             {
@@ -342,8 +346,7 @@ namespace OpenHintSQL.Connection
                     return true;
                 }
 
-                if (authenticationType.IndexOf("sql", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                    !string.IsNullOrEmpty(password))
+                if (authenticationType.IndexOf("sql", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return false;
                 }
@@ -356,6 +359,37 @@ namespace OpenHintSQL.Connection
                 return true;
 
             return string.IsNullOrEmpty(userName);
+        }
+
+        private static void ApplyAuthentication(
+            SqlConnectionStringBuilder builder,
+            bool useIntegratedSecurity,
+            string userName,
+            string password)
+        {
+            if (builder == null)
+                return;
+
+            if (useIntegratedSecurity)
+            {
+                builder.IntegratedSecurity = true;
+                RemoveCredentialKeywords(builder);
+                return;
+            }
+
+            builder.IntegratedSecurity = false;
+            if (!string.IsNullOrWhiteSpace(userName))
+                builder.UserID = userName;
+            if (!string.IsNullOrEmpty(password))
+                builder.Password = password;
+        }
+
+        private static void RemoveCredentialKeywords(SqlConnectionStringBuilder builder)
+        {
+            builder.Remove("User ID");
+            builder.Remove("Password");
+            builder.Remove("UID");
+            builder.Remove("PWD");
         }
 
         private static object ResolveVisualStudioService(Type serviceType, Type interfaceType)
