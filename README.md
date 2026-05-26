@@ -22,6 +22,30 @@ Provides instant, context-aware suggestions for databases, tables, columns, stor
 
 ---
 
+## Demo
+
+### Suggest databases
+
+<img src="docs/images/demo-suggest-databases.png" alt="OpenHint SQL suggesting databases after USE" width="760">
+
+### Suggest tables
+
+<img src="docs/images/demo-suggest-tables.png" alt="OpenHint SQL suggesting tables in a query" width="760">
+
+### Suggest columns
+
+<img src="docs/images/demo-suggest-columns.png" alt="OpenHint SQL suggesting columns for the current query context" width="760">
+
+### Suggest JOINs by related foreign keys
+
+<img src="docs/images/demo-suggest-join-by-related-fk.png" alt="OpenHint SQL suggesting JOIN clauses from related foreign keys" width="760">
+
+### Suggest snippets
+
+<img src="docs/images/demo-suggest-snippet.png" alt="OpenHint SQL suggesting snippet shortcuts" width="760">
+
+---
+
 ## Supported SSMS versions
 
 OpenHint SQL targets SSMS 18 through SSMS 22.
@@ -42,7 +66,7 @@ The installer and source-install script auto-detect installed SSMS 18/19/20/21/2
 
 ### Option A — Installer (recommended)
 
-1. Download `OpenHintSQLSetup-1.0.0.exe` from the [Releases](../../releases) page.
+1. Download `OpenHintSQLSetup-1.0.0.exe` from the [v1.0.0 release](https://github.com/Jarvis81/OpenHint-SQL/releases/tag/v1.0.0).
 2. Close all open SSMS windows.
 3. Run the installer **as Administrator**. It detects your SSMS installations, confirms with you, copies the extension files, and clears the SSMS caches automatically.
 4. Open SSMS and start typing in a query window.
