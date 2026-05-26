@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel.Composition;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Editor;
+using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
@@ -39,13 +40,16 @@ namespace OpenHintSQL.Completion
         [Import]
         internal IVsEditorAdaptersFactoryService AdapterService = null;
 
+        [Import(AllowDefault = true)]
+        internal ICompletionBroker CompletionBroker = null;
+
         /// <summary>
         /// Called when a new text view is created. Attaches the command filter to the view.
         /// </summary>
         /// <param name="textViewAdapter">The interop text view adapter.</param>
         public void VsTextViewCreated(IVsTextView textViewAdapter)
         {
-            AttachCommandFilter(textViewAdapter, AdapterService);
+            AttachCommandFilter(textViewAdapter, AdapterService, CompletionBroker);
         }
 
         /// <summary>
@@ -53,7 +57,8 @@ namespace OpenHintSQL.Completion
         /// </summary>
         internal static void AttachCommandFilter(
             IVsTextView textViewAdapter,
-            IVsEditorAdaptersFactoryService adapterService)
+            IVsEditorAdaptersFactoryService adapterService,
+            ICompletionBroker completionBroker = null)
         {
             try
             {
@@ -79,7 +84,7 @@ namespace OpenHintSQL.Completion
                 }
 
                 // Create the filter and insert it into the command chain
-                var filter = new CompletionCommandFilter(textView);
+                var filter = new CompletionCommandFilter(textView, completionBroker);
 
                 int hr = textViewAdapter.AddCommandFilter(filter, out IOleCommandTarget nextTarget);
                 if (hr != 0)
@@ -147,7 +152,9 @@ namespace OpenHintSQL.Completion
     {
         [Import]
         internal IVsEditorAdaptersFactoryService AdapterService = null;
-        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService);
+        [Import(AllowDefault = true)]
+        internal ICompletionBroker CompletionBroker = null;
+        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService, CompletionBroker);
     }
 
     /// <summary>
@@ -160,7 +167,9 @@ namespace OpenHintSQL.Completion
     {
         [Import]
         internal IVsEditorAdaptersFactoryService AdapterService = null;
-        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService);
+        [Import(AllowDefault = true)]
+        internal ICompletionBroker CompletionBroker = null;
+        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService, CompletionBroker);
     }
 
     /// <summary>
@@ -173,7 +182,9 @@ namespace OpenHintSQL.Completion
     {
         [Import]
         internal IVsEditorAdaptersFactoryService AdapterService = null;
-        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService);
+        [Import(AllowDefault = true)]
+        internal ICompletionBroker CompletionBroker = null;
+        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService, CompletionBroker);
     }
 
     /// <summary>
@@ -186,7 +197,9 @@ namespace OpenHintSQL.Completion
     {
         [Import]
         internal IVsEditorAdaptersFactoryService AdapterService = null;
-        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService);
+        [Import(AllowDefault = true)]
+        internal ICompletionBroker CompletionBroker = null;
+        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService, CompletionBroker);
     }
 
     /// <summary>
@@ -199,7 +212,9 @@ namespace OpenHintSQL.Completion
     {
         [Import]
         internal IVsEditorAdaptersFactoryService AdapterService = null;
-        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService);
+        [Import(AllowDefault = true)]
+        internal ICompletionBroker CompletionBroker = null;
+        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService, CompletionBroker);
     }
 
     /// <summary>
@@ -212,6 +227,8 @@ namespace OpenHintSQL.Completion
     {
         [Import]
         internal IVsEditorAdaptersFactoryService AdapterService = null;
-        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService);
+        [Import(AllowDefault = true)]
+        internal ICompletionBroker CompletionBroker = null;
+        public void VsTextViewCreated(IVsTextView textViewAdapter) => CompletionViewCreationListener.AttachCommandFilter(textViewAdapter, AdapterService, CompletionBroker);
     }
 }

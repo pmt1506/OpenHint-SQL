@@ -244,11 +244,13 @@ namespace OpenHintSQL.UI
                         _listBox.SelectedIndex = 0;
                     }
 
+                    ResetHorizontalScroll();
                     PositionAtCaret();
 
                     // Show with fade-in animation
                     _border.Opacity = 0;
                     _popup.IsOpen = true;
+                    QueueResetHorizontalScroll();
 
                     var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(FadeInDurationMs))
                     {
@@ -302,6 +304,8 @@ namespace OpenHintSQL.UI
                         _listBox.SelectedIndex = idx + 1;
                     }
                     _listBox.ScrollIntoView(_listBox.SelectedItem);
+                    ResetHorizontalScroll();
+                    QueueResetHorizontalScroll();
                 }
                 catch (Exception ex)
                 {
@@ -327,6 +331,8 @@ namespace OpenHintSQL.UI
                         _listBox.SelectedIndex = idx - 1;
                     }
                     _listBox.ScrollIntoView(_listBox.SelectedItem);
+                    ResetHorizontalScroll();
+                    QueueResetHorizontalScroll();
                 }
                 catch (Exception ex)
                 {
@@ -398,6 +404,8 @@ namespace OpenHintSQL.UI
 
                         _listBox.SelectedItem = bestMatch ?? _filteredItems[0];
                         _listBox.ScrollIntoView(_listBox.SelectedItem);
+                        ResetHorizontalScroll();
+                        QueueResetHorizontalScroll();
                     }
 
                     // If no items match, hide the popup
@@ -439,6 +447,7 @@ namespace OpenHintSQL.UI
             VirtualizingPanel.SetIsVirtualizing(listBox, true);
             VirtualizingPanel.SetVirtualizationMode(listBox, VirtualizationMode.Recycling);
             ScrollViewer.SetCanContentScroll(listBox, true);
+            ScrollViewer.SetHorizontalScrollBarVisibility(listBox, ScrollBarVisibility.Auto);
 
             // Custom item template (generated in code)
             listBox.ItemTemplate = CreateItemTemplate();
@@ -640,6 +649,56 @@ namespace OpenHintSQL.UI
             {
                 Logger.Error("PositionAtCaret failed", ex);
             }
+        }
+
+        private void ResetHorizontalScroll()
+        {
+            try
+            {
+                _listBox.ApplyTemplate();
+
+                var scrollViewer = FindVisualChild<ScrollViewer>(_listBox);
+                scrollViewer?.ScrollToLeftEnd();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"ResetHorizontalScroll failed: {ex.Message}");
+            }
+        }
+
+        private void QueueResetHorizontalScroll()
+        {
+            try
+            {
+                var dispatcher = _listBox.Dispatcher;
+                if (dispatcher == null)
+                    return;
+
+                dispatcher.BeginInvoke(new Action(ResetHorizontalScroll), DispatcherPriority.Loaded);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"QueueResetHorizontalScroll failed: {ex.Message}");
+            }
+        }
+
+        private static T FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+        {
+            if (parent == null)
+                return null;
+
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+                if (child is T typed)
+                    return typed;
+
+                var descendant = FindVisualChild<T>(child);
+                if (descendant != null)
+                    return descendant;
+            }
+
+            return null;
         }
 
         /// <summary>

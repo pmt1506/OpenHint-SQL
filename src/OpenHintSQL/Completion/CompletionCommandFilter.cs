@@ -1,6 +1,8 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Windows.Threading;
 using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Text.Editor;
 using OpenHintSQL.Connection;
@@ -32,8 +34,11 @@ namespace OpenHintSQL.Completion
     internal sealed class CompletionCommandFilter : IOleCommandTarget
     {
         private readonly IWpfTextView _textView;
+        private readonly ICompletionBroker _nativeCompletionBroker;
         private CompletionPopup _popup;
         private bool _isDisposed;
+        private DispatcherTimer _nativeCompletionSuppressTimer;
+        private DateTime _nativeCompletionSuppressUntilUtc;
 
         /// <summary>
         /// The next command target in the chain. Set by the caller after AddCommandFilter.
@@ -44,14 +49,18 @@ namespace OpenHintSQL.Completion
         /// Minimum prefix length required to trigger completion.
         /// </summary>
         private const int MinPrefixLength = 2;
+        private const int NativeCompletionSuppressDurationMs = 5000;
 
         /// <summary>
         /// Creates a new command filter for the given text view.
         /// </summary>
         /// <param name="textView">The WPF text view to attach to.</param>
-        public CompletionCommandFilter(IWpfTextView textView)
+        public CompletionCommandFilter(
+            IWpfTextView textView,
+            ICompletionBroker nativeCompletionBroker = null)
         {
             _textView = textView ?? throw new ArgumentNullException(nameof(textView));
+            _nativeCompletionBroker = nativeCompletionBroker;
 
             // Create the completion popup (must be on UI thread, which we are during view creation)
             _popup = new CompletionPopup();
@@ -485,9 +494,8 @@ namespace OpenHintSQL.Completion
                 // need a fresh query — they swap the popup's contents entirely.
                 if (IsPopupVisible() && !string.IsNullOrEmpty(prefix) && !_popup.IsShowingStatus)
                 {
-                    DismissNativeCompletionPopup();
+                    StartNativeCompletionSuppression();
                     _popup.UpdateFilter(prefix);
-                    QueueDismissNativeCompletionPopup();
 
                     if (_popup.SelectedItem == null && !_popup.HasItems)
                     {
@@ -528,9 +536,8 @@ namespace OpenHintSQL.Completion
 
                 if (items != null && items.Count > 0)
                 {
-                    DismissNativeCompletionPopup();
+                    StartNativeCompletionSuppression();
                     _popup.Show(_textView, items);
-                    QueueDismissNativeCompletionPopup();
                 }
                 else
                 {
@@ -729,6 +736,7 @@ namespace OpenHintSQL.Completion
         {
             try
             {
+                StopNativeCompletionSuppression();
                 _popup?.Dismiss();
             }
             catch (Exception ex)
@@ -738,6 +746,38 @@ namespace OpenHintSQL.Completion
         }
 
         private void DismissNativeCompletionPopup()
+        {
+            DismissNativeCompletionSessions();
+            SendNativeCancelCommand();
+        }
+
+        private void DismissNativeCompletionSessions()
+        {
+            try
+            {
+                if (_nativeCompletionBroker == null || _textView == null)
+                    return;
+
+                var sessions = _nativeCompletionBroker.GetSessions(_textView);
+                foreach (var session in sessions)
+                {
+                    try
+                    {
+                        session.Dismiss();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Warn($"Could not dismiss native completion session: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Could not query native completion sessions: {ex.Message}");
+            }
+        }
+
+        private void SendNativeCancelCommand()
         {
             try
             {
@@ -750,11 +790,11 @@ namespace OpenHintSQL.Completion
             }
             catch (Exception ex)
             {
-                Logger.Warn($"Could not dismiss native completion popup: {ex.Message}");
+                Logger.Warn($"Could not send native completion cancel command: {ex.Message}");
             }
         }
 
-        private void QueueDismissNativeCompletionPopup()
+        private void StartNativeCompletionSuppression()
         {
             try
             {
@@ -762,11 +802,61 @@ namespace OpenHintSQL.Completion
                 if (dispatcher == null)
                     return;
 
-                dispatcher.BeginInvoke(new Action(DismissNativeCompletionPopup));
+                _nativeCompletionSuppressUntilUtc = DateTime.UtcNow.AddMilliseconds(NativeCompletionSuppressDurationMs);
+
+                DismissNativeCompletionPopup();
+
+                if (_nativeCompletionSuppressTimer == null)
+                {
+                    _nativeCompletionSuppressTimer = new DispatcherTimer(
+                        DispatcherPriority.Background,
+                        dispatcher)
+                    {
+                        Interval = TimeSpan.FromMilliseconds(125)
+                    };
+                    _nativeCompletionSuppressTimer.Tick += OnNativeCompletionSuppressTimerTick;
+                }
+
+                if (!_nativeCompletionSuppressTimer.IsEnabled)
+                    _nativeCompletionSuppressTimer.Start();
             }
             catch (Exception ex)
             {
-                Logger.Warn($"Could not queue native completion dismiss: {ex.Message}");
+                Logger.Warn($"Could not start native completion suppression: {ex.Message}");
+            }
+        }
+
+        private void OnNativeCompletionSuppressTimerTick(object sender, EventArgs e)
+        {
+            try
+            {
+                if (_isDisposed ||
+                    !IsPopupVisible() ||
+                    DateTime.UtcNow >= _nativeCompletionSuppressUntilUtc)
+                {
+                    StopNativeCompletionSuppression();
+                    return;
+                }
+
+                DismissNativeCompletionPopup();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Native completion suppression tick failed: {ex.Message}");
+                StopNativeCompletionSuppression();
+            }
+        }
+
+        private void StopNativeCompletionSuppression()
+        {
+            try
+            {
+                if (_nativeCompletionSuppressTimer != null)
+                    _nativeCompletionSuppressTimer.Stop();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Could not stop native completion suppression: {ex.Message}");
             }
         }
 
@@ -816,6 +906,11 @@ namespace OpenHintSQL.Completion
                 _isDisposed = true;
 
                 DismissPopup();
+                if (_nativeCompletionSuppressTimer != null)
+                {
+                    _nativeCompletionSuppressTimer.Tick -= OnNativeCompletionSuppressTimerTick;
+                    _nativeCompletionSuppressTimer = null;
+                }
 
                 SchemaCache.OnSchemaLoaded -= OnSchemaReady;
                 SchemaCache.OnSchemaLoadFailed -= OnSchemaLoadFailed;
