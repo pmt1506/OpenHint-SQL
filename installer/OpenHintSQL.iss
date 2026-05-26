@@ -4,7 +4,7 @@
 ;  Supported: SSMS 18.12.1 / 19.3 / 20.2.1 / 21.x / 22.x
 ;  Architecture: SSMS 18-20 are 32-bit; SSMS 21-22 are 64-bit
 ;
-;  Build with:  build-installer.bat
+;  Build with:  scripts\build-installer.bat
 ;  Output:      dist\OpenHintSQLSetup-{#AppVersion}.exe
 ; ===========================================================================
 
@@ -19,7 +19,7 @@
 ; --------------------------------------------------------------------------
 [Setup]
 ; --------------------------------------------------------------------------
-AppId={{#AppId}
+AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -175,10 +175,18 @@ var
 begin
   MajorStr := IntToStr(Major);
   DirName  := 'Microsoft SQL Server Management Studio ' + MajorStr + '\Common7\IDE';
-  PF86     := ExpandConstant('{autopf(x86)}') + '\' + DirName;
-  PF64     := ExpandConstant('{autopf}')      + '\' + DirName;
-  PF86Release := ExpandConstant('{autopf(x86)}') + '\Microsoft SQL Server Management Studio ' + MajorStr + '\Release\Common7\IDE';
-  PF64Release := ExpandConstant('{autopf}')      + '\Microsoft SQL Server Management Studio ' + MajorStr + '\Release\Common7\IDE';
+  PF86     := ExpandConstant('{pf32}') + '\' + DirName;
+  PF86Release := ExpandConstant('{pf32}') + '\Microsoft SQL Server Management Studio ' + MajorStr + '\Release\Common7\IDE';
+  if IsWin64 then
+  begin
+    PF64 := ExpandConstant('{pf64}') + '\' + DirName;
+    PF64Release := ExpandConstant('{pf64}') + '\Microsoft SQL Server Management Studio ' + MajorStr + '\Release\Common7\IDE';
+  end
+  else
+  begin
+    PF64 := PF86;
+    PF64Release := PF86Release;
+  end;
 
   { SSMS 18–20 install in Program Files (x86); 21–22 in Program Files.
     Check both paths — Microsoft may change this in a future release. }
@@ -332,11 +340,9 @@ begin
   if GFoundCount = 0 then
   begin
     MsgBox(
-      'No supported SSMS installation was found on this computer.'#13#10 +
-      #13#10 +
+      'No supported SSMS installation was found on this computer.'#13#10#13#10 +
       'OpenHint SQL supports SSMS 18.12.1, 19.3, 20.2.1, 21.x, and 22.x.'#13#10 +
-      'Please install one of those versions first.'#13#10 +
-      #13#10 +
+      'Please install one of those versions first.'#13#10#13#10 +
       'Download: https://aka.ms/ssmsfullsetup',
       mbCriticalError, MB_OK);
     Result := False;
@@ -353,9 +359,8 @@ begin
 
   { Confirm with the user which installations will be updated }
   if MsgBox(
-    'OpenHint SQL will be installed into the following SSMS version(s):'#13#10 +
-    #13#10 + FoundList +
-    #13#10 + 'Click OK to continue, or Cancel to exit.',
+    'OpenHint SQL will be installed into the following SSMS version(s):'#13#10#13#10 +
+    FoundList + #13#10 + 'Click OK to continue, or Cancel to exit.',
     mbInformation, MB_OKCANCEL) = IDCANCEL then
   begin
     Result := False;
@@ -374,10 +379,8 @@ begin
   if IsSsmsRunning then
   begin
     Answer := MsgBox(
-      'SQL Server Management Studio is currently running.'#13#10 +
-      #13#10 +
-      'The installer needs to replace extension files that SSMS holds open.'#13#10 +
-      #13#10 +
+      'SQL Server Management Studio is currently running.'#13#10#13#10 +
+      'The installer needs to replace extension files that SSMS holds open.'#13#10#13#10 +
       'Click YES to close SSMS automatically.'#13#10 +
       'Click NO to cancel so you can close it manually.',
       mbConfirmation, MB_YESNO);

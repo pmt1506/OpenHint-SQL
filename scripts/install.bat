@@ -7,13 +7,15 @@ REM  Run as Administrator
 REM
 REM  Supported: SSMS 18.12.1 / 19.3 / 20.2.1 / 21.x / 22.x
 REM
-REM  Usage:  install.bat         - installs to every detected version
-REM          install.bat 20      - installs to SSMS 20 only
+REM  Usage:  scripts\install.bat         - installs to every detected version
+REM          scripts\install.bat 20      - installs to SSMS 20 only
 REM ============================================================
 
-set BUILD_DIR=%~dp0src\OpenHintSQL\bin\Release\net48
-set TARGET_VERSION=%1
-set BUILD_LOG=%TEMP%\OpenHintSQL-build.log
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
+set "BUILD_DIR=%REPO_ROOT%\src\OpenHintSQL\bin\Release\net48"
+set "TARGET_VERSION=%~1"
+set "BUILD_LOG=%TEMP%\OpenHintSQL-build.log"
 
 echo.
 echo  OpenHintSQL Install Script
@@ -31,14 +33,14 @@ if %ERRORLEVEL% neq 0 (
 tasklist 2>nul | find /I "Ssms.exe" >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     echo  ERROR: SSMS is currently running.
-    echo  Please save your work, close all SSMS windows, then run install.bat again.
+    echo  Please save your work, close all SSMS windows, then run scripts\install.bat again.
     pause
     exit /b 1
 )
 
 REM ── Auto-build project ─────────────────────────────────────
 echo  Building OpenHintSQL (Release)...
-dotnet build "%~dp0src\OpenHintSQL\OpenHintSQL.csproj" -c Release --nologo --verbosity:minimal > "%BUILD_LOG%" 2>&1
+dotnet build "%REPO_ROOT%\src\OpenHintSQL\OpenHintSQL.csproj" -c Release --nologo --verbosity:minimal > "%BUILD_LOG%" 2>&1
 if %ERRORLEVEL% neq 0 (
     echo  ERROR: Build failed! Check the errors above.
     type "%BUILD_LOG%"
@@ -124,7 +126,7 @@ mkdir "!EXT_DIR!"
 
 copy /Y "%BUILD_DIR%\*.dll"                    "!EXT_DIR!\" >nul
 copy /Y "%BUILD_DIR%\OpenHintSQL.pkgdef"       "!EXT_DIR!\" >nul
-copy /Y "%~dp0src\OpenHintSQL\source.extension.vsixmanifest" "!EXT_DIR!\extension.vsixmanifest" >nul
+copy /Y "%REPO_ROOT%\src\OpenHintSQL\source.extension.vsixmanifest" "!EXT_DIR!\extension.vsixmanifest" >nul
 
 if not exist "!EXT_DIR!\Config" mkdir "!EXT_DIR!\Config"
 xcopy /Y /E "%BUILD_DIR%\Config" "!EXT_DIR!\Config\" >nul

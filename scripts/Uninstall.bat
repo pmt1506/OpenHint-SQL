@@ -7,8 +7,8 @@ REM  Run as Administrator
 REM
 REM  Supported: SSMS 18.12.1 / 19.3 / 20.2.1 / 21.x / 22.x
 REM
-REM  Usage:  Uninstall.bat         - uninstalls from every detected version
-REM          Uninstall.bat 20      - uninstalls from SSMS 20 only
+REM  Usage:  scripts\Uninstall.bat         - uninstalls from every detected version
+REM          scripts\Uninstall.bat 20      - uninstalls from SSMS 20 only
 REM ============================================================
 
 set "TARGET_VERSION=%~1"
@@ -34,7 +34,7 @@ if %ERRORLEVEL% neq 0 (
 tasklist 2>nul | find /I "Ssms.exe" >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     echo  ERROR: SSMS is currently running.
-    echo  Please save your work, close all SSMS windows, then run Uninstall.bat again.
+    echo  Please save your work, close all SSMS windows, then run scripts\Uninstall.bat again.
     pause
     exit /b 1
 )

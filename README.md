@@ -34,7 +34,7 @@ OpenHint SQL targets SSMS 18 through SSMS 22.
 | 21.x | 64-bit | Supported by VSIX manifest and install script |
 | 22.x | 64-bit | Supported; smoke-tested on SSMS 22 |
 
-`INSTALL.bat` and the installer auto-detect installed SSMS 18/19/20/21/22 instances and install into every detected version in one pass. SSMS 18-20 use the 32-bit VS isolated shell; SSMS 21-22 use the 64-bit VS 2022 shell.
+The installer and source-install script auto-detect installed SSMS 18/19/20/21/22 instances and install into every detected version in one pass. SSMS 18-20 use the 32-bit VS isolated shell; SSMS 21-22 use the 64-bit VS 2022 shell.
 
 ---
 
@@ -60,11 +60,19 @@ cd OpenHint-SQL
 dotnet build src\OpenHintSQL\OpenHintSQL.csproj -c Release
 
 REM Install to all detected SSMS versions (run as Administrator)
-INSTALL.bat
+scripts\install.bat
 
 REM Install to a specific version only
-INSTALL.bat 20
+scripts\install.bat 20
 ```
+
+Maintainer packaging utilities live under `scripts\` to keep the repository root focused on source, docs, and solution files. To build the release installer, install Inno Setup 6 at its default location or make `ISCC.exe` available on `PATH`, then run:
+
+```cmd
+scripts\build-installer.bat
+```
+
+The installer is written to `dist\OpenHintSQLSetup-1.0.0.exe`. The `dist\` folder is intentionally ignored by Git, so generated installers do not show up as source files.
 
 ---
 
@@ -278,7 +286,7 @@ Database names for `USE` completion are cached in memory for 5 minutes per `serv
 **No "OpenHint SQL" pane in the Output window / popup never appears**
 
 1. Confirm the DLL is in place: `<SSMS IDE dir>\Extensions\OpenHintSQL\OpenHintSQL.dll`
-2. Re-run `INSTALL.bat` as Administrator — this rebuilds the extension and MEF caches.
+2. Re-run `scripts\install.bat` as Administrator — this rebuilds the extension and MEF caches.
 3. For a detailed load error, start SSMS with the activity log:
    ```cmd
    "C:\Program Files (x86)\Microsoft SQL Server Management Studio 20\Common7\IDE\Ssms.exe" /log
