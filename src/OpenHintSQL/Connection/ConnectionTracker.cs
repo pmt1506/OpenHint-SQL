@@ -99,14 +99,14 @@ namespace OpenHintSQL.Connection
                 return null;
             }
 
-            Logger.Log($"SSqlEditorService resolved as {editorService.GetType().FullName}");
+            Logger.Diagnostic($"SSqlEditorService resolved as {editorService.GetType().FullName}");
 
             var activeDetails = Invoke(editorService, interfaceType, "GetActiveEditorDetails");
             string moniker = GetPropertyValue(activeDetails, "Moniker") as string;
             if (string.IsNullOrEmpty(moniker))
                 moniker = Invoke(editorService, interfaceType, "GetActiveEditorMoniker") as string;
 
-            Logger.Log($"SSqlEditorService active moniker: {(string.IsNullOrEmpty(moniker) ? "<empty>" : moniker)}");
+            Logger.Diagnostic($"SSqlEditorService active moniker: {(string.IsNullOrEmpty(moniker) ? "<empty>" : moniker)}");
 
             object uiConnInfo = null;
             if (!string.IsNullOrEmpty(moniker))
@@ -119,7 +119,7 @@ namespace OpenHintSQL.Connection
             var info = BuildConnectionInfo(dbConnection, uiConnInfo);
             if (info != null)
             {
-                Logger.Log($"Connection obtained (SqlEditorService): {info.Server} / {info.Database}");
+                Logger.Log("Connection obtained (SqlEditorService)");
                 return info;
             }
 
@@ -193,7 +193,7 @@ namespace OpenHintSQL.Connection
             var info = BuildConnectionInfo(null, uiConnInfo);
             if (info != null)
             {
-                Logger.Log($"Connection obtained (reflection): {info.Server} / {info.Database}");
+                Logger.Log("Connection obtained (reflection)");
                 return info;
             }
 
@@ -240,7 +240,7 @@ namespace OpenHintSQL.Connection
                  !string.IsNullOrWhiteSpace(authenticationType));
             bool shouldUseIntegratedSecurity = ShouldUseIntegratedSecurity(userName, password, authenticationType);
             int connectTimeout = shouldUseIntegratedSecurity ? 60 : 10;
-            Logger.Log($"Connection auth hint: type='{(string.IsNullOrWhiteSpace(authenticationType) ? "<empty>" : authenticationType)}', hasUser={!string.IsNullOrWhiteSpace(userName)}, hasPassword={!string.IsNullOrEmpty(password)}");
+            Logger.Diagnostic($"Connection auth hint: type='{(string.IsNullOrWhiteSpace(authenticationType) ? "<empty>" : authenticationType)}', hasUser={!string.IsNullOrWhiteSpace(userName)}, hasPassword={!string.IsNullOrEmpty(password)}");
 
             if (!string.IsNullOrWhiteSpace(connectionString))
             {
@@ -256,7 +256,7 @@ namespace OpenHintSQL.Connection
 
                     if (hasAuthenticationHints)
                         ApplyAuthentication(existing, shouldUseIntegratedSecurity, userName, password);
-                    Logger.Log($"Connection auth mode: {(existing.IntegratedSecurity ? "Windows Integrated" : "SQL/User")}");
+                    Logger.Diagnostic($"Connection auth mode: {(existing.IntegratedSecurity ? "Windows Integrated" : "SQL/User")}");
 
                     return new ConnectionInfo
                     {
@@ -280,7 +280,7 @@ namespace OpenHintSQL.Connection
             };
 
             ApplyAuthentication(builder, shouldUseIntegratedSecurity, userName, password);
-            Logger.Log($"Connection auth mode: {(builder.IntegratedSecurity ? "Windows Integrated" : "SQL/User")}");
+            Logger.Diagnostic($"Connection auth mode: {(builder.IntegratedSecurity ? "Windows Integrated" : "SQL/User")}");
 
             return new ConnectionInfo
             {
@@ -428,7 +428,7 @@ namespace OpenHintSQL.Connection
             try
             {
                 var service = getService();
-                Logger.Log($"{source}: {(service == null ? "null" : service.GetType().FullName)}");
+                Logger.Diagnostic($"{source}: {(service == null ? "null" : service.GetType().FullName)}");
                 return service;
             }
             catch (Exception ex)
@@ -582,7 +582,7 @@ namespace OpenHintSQL.Connection
                 if (System.IO.File.Exists(path))
                 {
                     var assembly = Assembly.LoadFrom(path);
-                    Logger.Log($"Loaded SSMS assembly {simpleName} from {path}");
+                    Logger.Diagnostic($"Loaded SSMS assembly {simpleName} from {path}");
                     return assembly;
                 }
             }

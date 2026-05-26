@@ -1,6 +1,6 @@
 param(
-    [string]$Server = "JARVISNGUYEN",
-    [string]$Database = "BillPayment"
+    [string]$Server = "localhost",
+    [string]$Database = "master"
 )
 
 $ErrorActionPreference = "Stop"

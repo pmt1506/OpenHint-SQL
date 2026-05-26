@@ -62,7 +62,7 @@ namespace OpenHintSQL.Completion
                 if (emptyPrefix && !IsStrongClauseContext(context) && !inDotContext)
                     return new List<CompletionItemData>();
 
-                Logger.Log($"CompletionEngine: prefix='{prefix}', context={context}, server='{server}', db='{database}'");
+                Logger.Diagnostic($"CompletionEngine: prefix='{prefix}', context={context}, server='{server}', db='{database}'");
 
                 var results = new List<CompletionItemData>();
 

@@ -131,7 +131,7 @@ namespace OpenHintSQL.Completion
                 // Returns immediately and kicks off the actual load on a background task.
                 // The popup wired up in CompletionCommandFilter is already subscribed to
                 // SchemaCache.OnSchemaLoaded, so a visible popup will refresh itself.
-                Logger.Log($"Preload: warming cache for {conn.Server} / {conn.Database}");
+                Logger.Log("Preload: warming schema cache for active connection");
                 SchemaCache.GetOrLoad(conn.Server, conn.Database, conn.ConnectionString);
             }
             catch (Exception ex)

@@ -24,6 +24,20 @@ namespace OpenHintSQL.Utils
                 "OpenHintSQL.log");
 
         /// <summary>
+        /// Verbose diagnostics are disabled by default because they can include local
+        /// server, database, object, and typed-prefix details.
+        /// </summary>
+        public static bool DiagnosticsEnabled { get; } =
+            IsEnvironmentFlagEnabled("OPENHINTSQL_DEBUG");
+
+        /// <summary>
+        /// Persistent file logging is opt-in. The VS Output pane still receives normal
+        /// non-sensitive status messages.
+        /// </summary>
+        private static bool FileLoggingEnabled { get; } =
+            IsEnvironmentFlagEnabled("OPENHINTSQL_FILE_LOG");
+
+        /// <summary>
         /// Initialize the logger with a reference to the VS shell.
         /// Must be called on the UI thread.
         /// </summary>
@@ -72,6 +86,15 @@ namespace OpenHintSQL.Utils
         }
 
         /// <summary>
+        /// Log detailed diagnostics only when OPENHINTSQL_DEBUG is enabled.
+        /// </summary>
+        public static void Diagnostic(string message)
+        {
+            if (DiagnosticsEnabled)
+                Log(message);
+        }
+
+        /// <summary>
         /// Log a warning message.
         /// </summary>
         public static void Warn(string message)
@@ -101,6 +124,9 @@ namespace OpenHintSQL.Utils
 
         private static void WriteFileLog(string message)
         {
+            if (!FileLoggingEnabled)
+                return;
+
             try
             {
                 lock (_lock)
@@ -112,6 +138,22 @@ namespace OpenHintSQL.Utils
             catch
             {
                 // File logging is diagnostic only and must never affect editor behavior.
+            }
+        }
+
+        public static bool IsEnvironmentFlagEnabled(string name)
+        {
+            try
+            {
+                var value = Environment.GetEnvironmentVariable(name);
+                return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
             }
         }
     }

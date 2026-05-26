@@ -1,8 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Data.SqlClient;
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading.Tasks;
 using OpenHintSQL.Utils;
 
@@ -44,7 +41,7 @@ namespace OpenHintSQL.Schema
                 if ((DateTime.UtcNow - cached.LoadedAt) < CacheTtl)
                     return cached;
 
-                Logger.Log($"Database list stale for [{key}], triggering background refresh");
+                Logger.Diagnostic($"Database list stale for [{key}], triggering background refresh");
                 StartBackgroundLoad(key, connectionString);
                 return cached;
             }
@@ -52,7 +49,7 @@ namespace OpenHintSQL.Schema
             if (TryGetRecentFailure(key, out _))
                 return DatabaseList.Empty;
 
-            Logger.Log($"Database list cache miss for [{key}], starting background load");
+            Logger.Diagnostic($"Database list cache miss for [{key}], starting background load");
             StartBackgroundLoad(key, connectionString);
             return DatabaseList.Empty;
         }
@@ -85,7 +82,7 @@ namespace OpenHintSQL.Schema
                     }
                     catch (Exception ex)
                     {
-                        Logger.Error($"Background database list load failed for [{k}]", ex);
+                        Logger.Error("Background database list load failed", ex);
                         RecordLoadFailure(k, ex.Message);
                     }
                     finally
@@ -98,7 +95,7 @@ namespace OpenHintSQL.Schema
 
         private static async Task LoadDatabaseListAsync(string key, string connectionString)
         {
-            Logger.Log($"Loading database list for [{key}] from server...");
+            Logger.Diagnostic($"Loading database list for [{key}] from server...");
             var databases = await AsyncDatabaseLoader.LoadAsync(connectionString).ConfigureAwait(false);
 
             if (databases.IsLoaded)
@@ -109,7 +106,7 @@ namespace OpenHintSQL.Schema
             }
             else
             {
-                Logger.Warn($"Database list load returned empty/failed for [{key}]");
+                Logger.Warn("Database list load returned empty/failed");
                 RecordLoadFailure(key, databases.LoadError);
             }
         }
@@ -174,41 +171,11 @@ namespace OpenHintSQL.Schema
 
         private static string BuildConnectionFingerprint(string connectionString)
         {
-            if (string.IsNullOrWhiteSpace(connectionString))
-                return "no-connection";
-
-            try
-            {
-                var builder = new SqlConnectionStringBuilder(connectionString);
-
-                builder.Remove("Initial Catalog");
-                builder.Remove("Database");
-                builder.Remove("AttachDBFilename");
-                builder.Remove("Application Name");
-                builder.Remove("Connect Timeout");
-                builder.Remove("Connection Timeout");
-                builder.Remove("Pooling");
-                builder.Remove("Min Pool Size");
-                builder.Remove("Max Pool Size");
-
-                return "cs-" + Hash(builder.ConnectionString);
-            }
-            catch
-            {
-                return "cs-" + Hash(connectionString);
-            }
-        }
-
-        private static string Hash(string value)
-        {
-            using (var sha = SHA1.Create())
-            {
-                var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(value.ToLowerInvariant()));
-                var sb = new StringBuilder(10);
-                for (int i = 0; i < 5; i++)
-                    sb.Append(bytes[i].ToString("x2"));
-                return sb.ToString();
-            }
+            return ConnectionStringFingerprint.Build(
+                connectionString,
+                "Initial Catalog",
+                "Database",
+                "AttachDBFilename");
         }
     }
 }

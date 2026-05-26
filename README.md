@@ -14,7 +14,7 @@ Provides instant, context-aware suggestions for databases, tables, columns, stor
 - **FK-aware JOIN suggestions** — when a `FROM` table is in scope, typing `JOIN` surfaces related tables with the full `ON` clause pre-built from the actual foreign key (e.g. `Orders o ON o.CustomerId = c.Id`)
 - **Dot completion** — `alias.` immediately lists that table's columns with data type and PK/NULL labels
 - **40+ snippet shortcuts** — type a short code, press `Tab`, get a full statement with the cursor placed at the right position
-- **Persistent schema cache** — schema loads once per database and writes to disk; subsequent SSMS restarts load from cache instantly without re-querying the server (24-hour TTL)
+- **Persistent schema cache** — schema loads once per database and writes to disk; subsequent SSMS restarts load from cache instantly without re-querying the server (24-hour TTL; can be disabled)
 - **Eager preload** — schema fetch starts in the background the moment a query window opens, so the popup is ready before you need it
 - **SSMS-style popup** — custom WPF completion list; keyboard-navigable (↑/↓ to move, Tab/Enter to accept, Esc to dismiss)
 - **Native IntelliSense suppression** — while OpenHint SQL's popup is visible, the default SSMS completion popup is dismissed to avoid overlapping suggestion lists
@@ -193,7 +193,24 @@ The extension reads the active SSMS query-window connection and uses normal SQL 
 - `sys.objects`, `sys.columns`, `sys.types`, `sys.indexes`, and `sys.foreign_keys` for table/column/procedure/JOIN metadata
 - `sys.databases` for `USE` database suggestions
 
-Connection strings are only used locally to query metadata. Cache keys hash connection identity so credentials are not written to logs or cache filenames.
+Connection strings are only used locally to query metadata. Cache keys hash connection identity after password fields are removed, so credentials are not written to logs or cache filenames.
+
+By default, OpenHint SQL writes only minimal status messages to the SSMS **Output** pane and does not write a persistent log file. Verbose diagnostics are opt-in:
+
+```cmd
+setx OPENHINTSQL_DEBUG 1
+setx OPENHINTSQL_FILE_LOG 1
+```
+
+Restart SSMS after changing these flags. Diagnostic logs may include local server names, database names, typed completion prefixes, and object names, so only enable them when troubleshooting.
+
+Schema disk cache is enabled by default for performance and is stored under `%LocalAppData%\OpenHintSQL\schemacache`. Cache files contain schema metadata such as table, column, procedure/function, PK, and FK names. To disable disk cache in sensitive environments:
+
+```cmd
+setx OPENHINTSQL_DISABLE_DISK_CACHE 1
+```
+
+The installer and manual install scripts run locally, require administrator rights because SSMS extensions live under Program Files, and do not download or execute remote code. The release build script requires Inno Setup to be installed manually; it does not install build tools automatically.
 
 ---
 
@@ -232,7 +249,7 @@ src/OpenHintSQL/
 │   └── CompletionPopup.cs               # Custom WPF popup; virtualized ListBox;
 │                                         #   WS_EX_NOACTIVATE prevents focus stealing from editor
 └── Utils/
-    ├── Logger.cs                        # VS Output Window pane "OpenHint SQL"
+    ├── Logger.cs                        # VS Output Window pane "OpenHint SQL"; opt-in diagnostics/file log
     └── TextViewExtensions.cs            # ITextView helpers: word-before-caret, ReplaceSpan, screen pos
 ```
 
@@ -246,11 +263,11 @@ The extension registers as a **VSPackage** (`OpenHintSQLPackage`) with `[Provide
 %LocalAppData%\OpenHintSQL\schemacache\<12-char-hash>.json
 ```
 
-Keyed by SHA-1 of `server|database|connection-fingerprint`. Stores tables, columns (with PK flags), procs, and raw FK rows. On load, `DatabaseSchema.Build()` reconstructs the trie and resolves FK references. Invalidated after 24 hours or via `SchemaCache.RefreshAsync`.
+Keyed by SHA-1 of `server|database|connection-fingerprint`; password fields are removed before the fingerprint is hashed. Stores tables, columns (with PK flags), procs, and raw FK rows. On load, `DatabaseSchema.Build()` reconstructs the trie and resolves FK references. Invalidated after 24 hours or via `SchemaCache.RefreshAsync`. Set `OPENHINTSQL_DISABLE_DISK_CACHE=1` before starting SSMS to keep this cache in memory only.
 
 ### Database list cache
 
-Database names for `USE` completion are cached in memory for 5 minutes per `server|connection-fingerprint`. The active database is removed from the fingerprint, so changing the query window's current database does not split the server-level database list cache.
+Database names for `USE` completion are cached in memory for 5 minutes per `server|connection-fingerprint`. The active database and password fields are removed from the fingerprint, so changing the query window's current database does not split the server-level database list cache.
 
 > **Note for contributors:** All Newtonsoft.Json usage is confined to method bodies in `SchemaPersister.cs`. Do not add `[JsonIgnore]` or other Newtonsoft attributes to schema POCOs — type-level Newtonsoft references cause early MEF/VSPackage assembly load failures in SSMS because Newtonsoft.Json is not on the IDE root probe path at startup.
 
@@ -267,7 +284,7 @@ Database names for `USE` completion are cached in memory for 5 minutes per `serv
    "C:\Program Files (x86)\Microsoft SQL Server Management Studio 20\Common7\IDE\Ssms.exe" /log
    ```
    Open `%AppData%\Microsoft\SQL Server Management Studio\20.0_IsoShell\ActivityLog.xml` and search for `OpenHintSQL`.
-4. Extension logs are also written to:
+4. Optional file logs are written only when `OPENHINTSQL_FILE_LOG=1` is set before SSMS starts:
    ```text
    %LocalAppData%\OpenHintSQL\OpenHintSQL.log
    ```
@@ -275,14 +292,14 @@ Database names for `USE` completion are cached in memory for 5 minutes per `serv
 **Tables or columns don't appear**
 
 1. Confirm the query window has an active database connection.
-2. Check the Output pane for `Connection obtained: <server>/<db>` and `Schema cached for [...]: N tables`.
+2. Check the Output pane for `Connection obtained` and `Schema cached: N tables`.
 3. If you see `ScriptFactory is null`, the SSMS connection API couldn't be reached — try opening a new query window while connected to a database in Object Explorer.
 
 **Database names don't appear after `USE `**
 
 1. Confirm the query window is connected to the server whose databases you want to list.
 2. The active login must have permission to see databases in `sys.databases`.
-3. Check the Output pane or `%LocalAppData%\OpenHintSQL\OpenHintSQL.log` for `Database list loaded: N database(s)` or a database-list load error.
+3. Check the Output pane for `Database list loaded: N database(s)` or a database-list load error. Enable `OPENHINTSQL_FILE_LOG=1` only if you need a persistent troubleshooting log.
 
 **Connection timeout when using `runas /netonly` or customer VPN**
 

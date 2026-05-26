@@ -90,7 +90,7 @@ namespace OpenHintSQL.Snippets
                 }
 
                 _allSnippets = _shortcuts.Values.ToArray();
-                Logger.Log($"SnippetProvider loaded {_allSnippets.Length} snippets from {jsonPath}");
+                Logger.Log($"SnippetProvider loaded {_allSnippets.Length} snippets");
             }
             catch (Exception ex)
             {

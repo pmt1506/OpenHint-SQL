@@ -164,7 +164,7 @@ namespace OpenHintSQL.Completion
                 // Only log interesting ones to avoid noise: Tab=2, Enter=3, TypeChar=1, Backspace=6
                 if (nCmdID == 1 || nCmdID == 2 || nCmdID == 3 || nCmdID == 4 || nCmdID == 6)
                 {
-                    Logger.Log($"Exec: group={pguidCmdGroup}, ID={nCmdID}");
+                    Logger.Diagnostic($"Exec: group={pguidCmdGroup}, ID={nCmdID}");
                 }
 
                 // ─── PRE-PROCESSING ───────────────────────────────────────
@@ -292,7 +292,7 @@ namespace OpenHintSQL.Completion
                 {
                     if (SnippetProvider.Instance.TryGetSnippet(wordBeforeCaret, out SnippetDefinition snippet))
                     {
-                        Logger.Log($"Expanding snippet: '{wordBeforeCaret}' → '{snippet.Title}'");
+                        Logger.Diagnostic($"Expanding snippet: '{wordBeforeCaret}' -> '{snippet.Title}'");
                         ExpandSnippet(wordBeforeCaret, snippet);
                         DismissPopup();
                         return VSConstants.S_OK;
@@ -555,7 +555,7 @@ namespace OpenHintSQL.Completion
                 var items = CompletionEngine.GetCompletionItems(
                     prefix, fullText, caretOffset, server, database, connectionString);
 
-                Logger.Log($"Completion generated {items?.Count ?? 0} item(s) for prefix='{prefix}'");
+                Logger.Diagnostic($"Completion generated {items?.Count ?? 0} item(s) for prefix='{prefix}'");
 
                 if (items != null && items.Count > 0)
                 {
@@ -709,7 +709,7 @@ namespace OpenHintSQL.Completion
                     _textView.ReplaceSpan(replaceStart, wordLength, insertText);
                 }
 
-                Logger.Log($"Inserted completion: '{insertText}'");
+                Logger.Diagnostic($"Inserted completion: '{insertText}'");
             }
             catch (Exception ex)
             {

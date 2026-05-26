@@ -1,8 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Data.SqlClient;
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading.Tasks;
 using OpenHintSQL.Utils;
 
@@ -67,7 +64,7 @@ namespace OpenHintSQL.Schema
                 }
 
                 // Stale — trigger background refresh but still return stale data
-                Logger.Log($"Schema stale for [{key}], triggering background refresh");
+                Logger.Diagnostic($"Schema stale for [{key}], triggering background refresh");
                 StartBackgroundLoad(key, connectionString, allowDiskCache: false);
                 return cached;
             }
@@ -76,7 +73,7 @@ namespace OpenHintSQL.Schema
             if (TryGetRecentFailure(key, out _))
                 return DatabaseSchema.Empty;
 
-            Logger.Log($"Schema cache miss for [{key}], starting background load");
+            Logger.Diagnostic($"Schema cache miss for [{key}], starting background load");
             StartBackgroundLoad(key, connectionString, allowDiskCache: true);
             return DatabaseSchema.Empty;
         }
@@ -88,7 +85,7 @@ namespace OpenHintSQL.Schema
         public static Task RefreshAsync(string server, string database, string connectionString)
         {
             var key = BuildKey(server, database, connectionString);
-            Logger.Log($"Manual schema refresh requested for [{key}]");
+            Logger.Diagnostic($"Manual schema refresh requested for [{key}]");
 
             _cache.TryRemove(key, out _);
             _loadFailures.TryRemove(key, out _);
@@ -132,7 +129,7 @@ namespace OpenHintSQL.Schema
                     }
                     catch (Exception ex)
                     {
-                        Logger.Error($"Background schema load failed for [{k}]", ex);
+                        Logger.Error("Background schema load failed", ex);
                         RecordLoadFailure(k, ex.Message);
                     }
                     finally
@@ -168,14 +165,14 @@ namespace OpenHintSQL.Schema
             }
 
             // 2. Slow path: query the server.
-            Logger.Log($"Loading schema for [{key}] from server...");
+            Logger.Diagnostic($"Loading schema for [{key}] from server...");
             var schema = await AsyncSchemaLoader.LoadAsync(connectionString).ConfigureAwait(false);
 
             if (schema.IsLoaded)
             {
                 _cache[key] = schema;
                 _loadFailures.TryRemove(key, out _);
-                Logger.Log($"Schema cached for [{key}]: " +
+                Logger.Log("Schema cached: " +
                            $"{schema.Tables.Count} tables, " +
                            $"{schema.Views.Count} views, " +
                            $"{schema.Procedures.Count} procs");
@@ -187,7 +184,7 @@ namespace OpenHintSQL.Schema
             }
             else
             {
-                Logger.Warn($"Schema load returned empty/failed for [{key}]");
+                Logger.Warn("Schema load returned empty/failed");
                 RecordLoadFailure(key, schema.LoadError);
             }
         }
@@ -258,39 +255,7 @@ namespace OpenHintSQL.Schema
 
         private static string BuildConnectionFingerprint(string connectionString)
         {
-            if (string.IsNullOrWhiteSpace(connectionString))
-                return "no-connection";
-
-            try
-            {
-                var builder = new SqlConnectionStringBuilder(connectionString);
-
-                // Runtime-only knobs should not split the cache; identity/security knobs should.
-                builder.Remove("Application Name");
-                builder.Remove("Connect Timeout");
-                builder.Remove("Connection Timeout");
-                builder.Remove("Pooling");
-                builder.Remove("Min Pool Size");
-                builder.Remove("Max Pool Size");
-
-                return "cs-" + Hash(builder.ConnectionString);
-            }
-            catch
-            {
-                return "cs-" + Hash(connectionString);
-            }
-        }
-
-        private static string Hash(string value)
-        {
-            using (var sha = SHA1.Create())
-            {
-                var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(value.ToLowerInvariant()));
-                var sb = new StringBuilder(10);
-                for (int i = 0; i < 5; i++)
-                    sb.Append(bytes[i].ToString("x2"));
-                return sb.ToString();
-            }
+            return ConnectionStringFingerprint.Build(connectionString);
         }
     }
 }

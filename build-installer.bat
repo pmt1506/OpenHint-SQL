@@ -12,7 +12,7 @@ REM    1. Build the Release DLL via dotnet build
 REM    2. Verify all required files exist
 REM    3. Compute and display SHA-256 hashes of the output files
 REM       (so you can verify the build before distribution)
-REM    4. Install Inno Setup 6 via Chocolatey if not present
+REM    4. Verify Inno Setup 6 is installed
 REM    5. Compile the installer using ISCC
 REM
 REM  The installer supports SSMS 18.12.1 / 19.3 / 20.2.1 / 21.x / 22.x.
@@ -132,23 +132,10 @@ if exist %ISCC_DEFAULT% (
     echo       Found: %ISCC_DEFAULT%
 ) else (
     echo       Inno Setup not found at default path.
-    echo       Installing via Chocolatey (requires internet access)...
-    choco install innosetup -y --no-progress
-    if %ERRORLEVEL% neq 0 (
-        echo  ERROR: Could not install Inno Setup via Chocolatey.
-        echo  Please install it manually from https://jrsoftware.org/isdl.php
-        echo  then re-run this script.
-        goto :fail
-    )
-    REM Refresh PATH so ISCC is found
-    call refreshenv 2>nul
-    if exist %ISCC_DEFAULT% (
-        set ISCC=%ISCC_DEFAULT%
-        echo       Inno Setup installed successfully.
-    ) else (
-        echo  ERROR: Inno Setup installed but ISCC.exe not found at expected path.
-        goto :fail
-    )
+    echo  ERROR: Inno Setup 6 is required to build the installer.
+    echo  Please install it manually from https://jrsoftware.org/isdl.php
+    echo  then re-run this script.
+    goto :fail
 )
 
 REM ── Step 5: Compile the installer ────────────────────────

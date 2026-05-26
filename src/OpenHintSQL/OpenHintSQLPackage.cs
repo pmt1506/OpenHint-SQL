@@ -38,7 +38,7 @@ namespace OpenHintSQL
 
             Utils.Logger.Initialize(this);
             Utils.Logger.Log("OpenHintSQL v1.0.0 loaded successfully.");
-            Utils.Logger.Log($"SSMS Process: {System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName}");
+            Utils.Logger.Diagnostic($"SSMS Process: {System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName}");
             Utils.Logger.Log($"Process Architecture: {(IntPtr.Size == 8 ? "64-bit" : "32-bit")}");
             Utils.Logger.Log($"VS Shell SDK Version: {typeof(Package).Assembly.GetName().Version}");
 

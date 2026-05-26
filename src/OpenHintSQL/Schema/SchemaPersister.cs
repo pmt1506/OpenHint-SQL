@@ -25,6 +25,9 @@ namespace OpenHintSQL.Schema
         /// </summary>
         public static readonly TimeSpan MaxAge = TimeSpan.FromHours(24);
 
+        private static bool DiskCacheDisabled =>
+            Logger.IsEnvironmentFlagEnabled("OPENHINTSQL_DISABLE_DISK_CACHE");
+
         /// <summary>
         /// Properties we must NOT serialise: cyclic (FK refs back to TableInfo) or derived
         /// (rebuilt by <see cref="DatabaseSchema.Build"/> from other persisted fields).
@@ -96,6 +99,9 @@ namespace OpenHintSQL.Schema
         /// </summary>
         public static async Task<DatabaseSchema> TryLoadAsync(string cacheKey)
         {
+            if (DiskCacheDisabled)
+                return null;
+
             try
             {
                 var path = GetPath(cacheKey);
@@ -106,7 +112,7 @@ namespace OpenHintSQL.Schema
                 var age = DateTime.UtcNow - info.LastWriteTimeUtc;
                 if (age > MaxAge)
                 {
-                    Logger.Log($"SchemaPersister: cache for [{cacheKey}] is stale ({age.TotalHours:F1}h), ignoring");
+                    Logger.Diagnostic($"SchemaPersister: cache for [{cacheKey}] is stale ({age.TotalHours:F1}h), ignoring");
                     return null;
                 }
 
@@ -124,13 +130,13 @@ namespace OpenHintSQL.Schema
                 schema.IsLoaded = true;
                 // LoadedAt comes back from JSON — keep it so SchemaCache TTL maths still work.
 
-                Logger.Log($"SchemaPersister: loaded [{cacheKey}] from disk " +
+                Logger.Diagnostic($"SchemaPersister: loaded [{cacheKey}] from disk " +
                            $"({schema.Tables.Count} tables, age {age.TotalHours:F1}h)");
                 return schema;
             }
             catch (Exception ex)
             {
-                Logger.Warn($"SchemaPersister.TryLoadAsync failed for [{cacheKey}]: {ex.Message}");
+                Logger.Warn($"SchemaPersister.TryLoadAsync failed: {ex.Message}");
                 return null;
             }
         }
@@ -143,6 +149,8 @@ namespace OpenHintSQL.Schema
         public static async Task TrySaveAsync(string cacheKey, DatabaseSchema schema)
         {
             if (schema == null || !schema.IsLoaded)
+                return;
+            if (DiskCacheDisabled)
                 return;
 
             try
@@ -165,11 +173,11 @@ namespace OpenHintSQL.Schema
                     File.Delete(path);
                 File.Move(tmpPath, path);
 
-                Logger.Log($"SchemaPersister: saved [{cacheKey}] to disk ({schema.Tables.Count} tables)");
+                Logger.Diagnostic($"SchemaPersister: saved [{cacheKey}] to disk ({schema.Tables.Count} tables)");
             }
             catch (Exception ex)
             {
-                Logger.Warn($"SchemaPersister.TrySaveAsync failed for [{cacheKey}]: {ex.Message}");
+                Logger.Warn($"SchemaPersister.TrySaveAsync failed: {ex.Message}");
             }
         }
 
@@ -185,12 +193,12 @@ namespace OpenHintSQL.Schema
                 if (File.Exists(path))
                 {
                     File.Delete(path);
-                    Logger.Log($"SchemaPersister: invalidated [{cacheKey}]");
+                    Logger.Diagnostic($"SchemaPersister: invalidated [{cacheKey}]");
                 }
             }
             catch (Exception ex)
             {
-                Logger.Warn($"SchemaPersister.Invalidate failed for [{cacheKey}]: {ex.Message}");
+                Logger.Warn($"SchemaPersister.Invalidate failed: {ex.Message}");
             }
         }
 
