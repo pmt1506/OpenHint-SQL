@@ -24,25 +24,25 @@ Provides instant, context-aware suggestions for databases, tables, columns, stor
 
 ## Demo
 
-### Suggest databases
+**Suggest databases**
 
-<img src="docs/images/demo-suggest-databases.png" alt="OpenHint SQL suggesting databases after USE" width="760">
+<img src="docs/images/demo-suggest-databases.png" alt="OpenHint SQL suggesting databases after USE" width="550">
 
-### Suggest tables
+**Suggest tables**
 
-<img src="docs/images/demo-suggest-tables.png" alt="OpenHint SQL suggesting tables in a query" width="760">
+<img src="docs/images/demo-suggest-tables.png" alt="OpenHint SQL suggesting tables in a query" width="550">
 
-### Suggest columns
+**Suggest columns**
 
-<img src="docs/images/demo-suggest-columns.png" alt="OpenHint SQL suggesting columns for the current query context" width="760">
+<img src="docs/images/demo-suggest-columns.png" alt="OpenHint SQL suggesting columns for the current query context" width="550">
 
-### Suggest JOINs by related foreign keys
+**Suggest JOINs by related foreign keys**
 
-<img src="docs/images/demo-suggest-join-by-related-fk.png" alt="OpenHint SQL suggesting JOIN clauses from related foreign keys" width="760">
+<img src="docs/images/demo-suggest-join-by-related-fk.png" alt="OpenHint SQL suggesting JOIN clauses from related foreign keys" width="550">
 
-### Suggest snippets
+**Suggest snippets**
 
-<img src="docs/images/demo-suggest-snippet.png" alt="OpenHint SQL suggesting snippet shortcuts" width="760">
+<img src="docs/images/demo-suggest-snippet.png" alt="OpenHint SQL suggesting snippet shortcuts" width="550">
 
 ---
 
