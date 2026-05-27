@@ -75,7 +75,7 @@ namespace OpenHintSQL.Completion
                 // In table/object positions, keep the popup focused on database objects.
                 // Keywords and snippets here are syntactic noise once the user is choosing
                 // a FROM/JOIN/UPDATE/INSERT target.
-                if (!inDotContext && IsTableObjectContext(context, fullText, caretOffset))
+                if (!inDotContext && IsTableObjectContext(context, fullText, caretOffset, prefix))
                 {
                     AddSchemaMatches(results, prefix, context, fullText, caretOffset, server, database, connectionString);
                     return SortAndLimit(results, prefix);
@@ -1023,19 +1023,52 @@ namespace OpenHintSQL.Completion
             }
         }
 
-        private static bool IsTableObjectContext(SqlContext context, string fullText, int caretOffset)
+        private static bool IsTableObjectContext(
+            SqlContext context,
+            string fullText,
+            int caretOffset,
+            string prefix)
         {
             switch (context)
             {
                 case SqlContext.FromClause:
                 case SqlContext.JoinClause:
                 case SqlContext.UpdateTarget:
-                    return true;
+                    return IsAtObjectNamePosition(fullText, caretOffset, prefix);
                 case SqlContext.InsertColumns:
-                    return ParenDepthAfterContextKeyword(fullText, caretOffset) == 0;
+                    return ParenDepthAfterContextKeyword(fullText, caretOffset) == 0 &&
+                           IsAtObjectNamePosition(fullText, caretOffset, prefix);
                 default:
                     return false;
             }
+        }
+
+        private static readonly Regex ObjectPositionKeywordPattern = new Regex(
+            @"\b(?:FROM|JOIN|APPLY|UPDATE|INSERT\s+INTO)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static bool IsAtObjectNamePosition(string fullText, int caretOffset, string prefix)
+        {
+            if (string.IsNullOrEmpty(fullText))
+                return true;
+
+            int prefixLength = string.IsNullOrEmpty(prefix) ? 0 : prefix.Length;
+            int limit = Math.Min(Math.Max(caretOffset - prefixLength, 0), fullText.Length);
+            string beforePrefix = fullText.Substring(0, limit);
+
+            var matches = ObjectPositionKeywordPattern.Matches(beforePrefix);
+            if (matches.Count == 0)
+                return true;
+
+            var keyword = matches[matches.Count - 1];
+            string afterKeyword = beforePrefix.Substring(keyword.Index + keyword.Length);
+            string trimmed = afterKeyword.TrimEnd();
+
+            if (trimmed.Length == 0)
+                return true;
+
+            char last = trimmed[trimmed.Length - 1];
+            return last == ',' || last == '.' || last == '[';
         }
 
         /// <summary>
