@@ -329,6 +329,42 @@ end;
 
 { ── Installer lifecycle ─────────────────────────────────────────────────── }
 
+function CleanExistingExtensionDirs: string;
+var
+  I: Integer;
+  ExtDir: string;
+begin
+  Result := '';
+
+  for I := 0 to 4 do
+  begin
+    if GSsmsFound[I] then
+    begin
+      ExtDir := GSsmsRoot[I] + '\{#ExtSubdir}';
+      if DirExists(ExtDir) then
+      begin
+        if not DelTree(ExtDir, True, True, True) then
+        begin
+          Result :=
+            'Could not remove the existing OpenHint SQL installation from:'#13#10 +
+            ExtDir + #13#10#13#10 +
+            'Please close SSMS, check folder permissions, and run the installer again.';
+          Exit;
+        end;
+
+        if DirExists(ExtDir) then
+        begin
+          Result :=
+            'The existing OpenHint SQL installation folder still exists after cleanup:'#13#10 +
+            ExtDir + #13#10#13#10 +
+            'Please remove it manually, then run the installer again.';
+          Exit;
+        end;
+      end;
+    end;
+  end;
+end;
+
 function InitializeSetup: Boolean;
 var
   FoundList: string;
@@ -360,7 +396,9 @@ begin
   { Confirm with the user which installations will be updated }
   if MsgBox(
     'OpenHint SQL will be installed into the following SSMS version(s):'#13#10#13#10 +
-    FoundList + #13#10 + 'Click OK to continue, or Cancel to exit.',
+    FoundList + #13#10 +
+    'Any existing OpenHint SQL files in those extension folders will be removed first.'#13#10#13#10 +
+    'Click OK to continue, or Cancel to exit.',
     mbInformation, MB_OKCANCEL) = IDCANCEL then
   begin
     Result := False;
@@ -397,6 +435,9 @@ begin
                 'Please close it manually, then re-run the installer.';
     end;
   end;
+
+  if Result = '' then
+    Result := CleanExistingExtensionDirs;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
