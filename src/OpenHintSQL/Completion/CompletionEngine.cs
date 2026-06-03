@@ -26,6 +26,8 @@ namespace OpenHintSQL.Completion
         /// Maximum number of completion items returned to keep the popup responsive.
         /// </summary>
         private const int MaxResults = 50;
+        private const int MinFuzzyPrefixLength = 4;
+        private const int MinDirectResultsBeforeFuzzy = 3;
 
         /// <summary>
         /// Generates a list of completion items based on the current editor state.
@@ -505,6 +507,29 @@ namespace OpenHintSQL.Completion
                     if (MatchesTablePrefix(view, prefix))
                         results.Add(BuildViewItem(view, includeAlias, usedAliases));
                 }
+
+                if (ShouldUseFuzzyFallback(prefix, results.Count))
+                {
+                    foreach (var table in schema.Tables.Values)
+                    {
+                        if (MatchesTablePrefix(table, prefix) || !IsFuzzyTableMatch(table, prefix))
+                            continue;
+
+                        var item = BuildTableItem(table, includeAlias, usedAliases);
+                        item.Priority = 1;
+                        results.Add(item);
+                    }
+
+                    foreach (var view in schema.Views.Values)
+                    {
+                        if (MatchesTablePrefix(view, prefix) || !IsFuzzyTableMatch(view, prefix))
+                            continue;
+
+                        var item = BuildViewItem(view, includeAlias, usedAliases);
+                        item.Priority = 1;
+                        results.Add(item);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -557,6 +582,16 @@ namespace OpenHintSQL.Completion
             return MatchesPrefix(table.FullName, prefix) ||
                    MatchesPrefix(table.Name, prefix) ||
                    MatchesPrefix(table.BracketedName, prefix);
+        }
+
+        private static bool IsFuzzyTableMatch(TableInfo table, string prefix)
+        {
+            if (table == null)
+                return false;
+
+            return IsFuzzyMatch(table.FullName, prefix) ||
+                   IsFuzzyMatch(table.Name, prefix) ||
+                   IsFuzzyMatch(table.BracketedName, prefix);
         }
 
         private static HashSet<string> GetUsedAliases(
@@ -808,8 +843,9 @@ namespace OpenHintSQL.Completion
 
         /// <summary>
         /// Generates a short alias for <paramref name="tableName"/> that doesn't collide with
-        /// <paramref name="usedAliases"/>. Strategy: first letter of each capital-letter run,
-        /// lowercased; fall back to suffix counter on collision.
+        /// <paramref name="usedAliases"/>. For underscore-delimited names, uses the first
+        /// letter of each token (e.g. TT_NOITRU_BENHAN -> tnb). Otherwise uses CamelCase /
+        /// PascalCase initials (e.g. BenhAn -> ba). Falls back to a numeric suffix on collision.
         /// </summary>
         private static string GenerateAlias(string tableName, HashSet<string> usedAliases)
         {
@@ -817,17 +853,31 @@ namespace OpenHintSQL.Completion
                 return "t";
 
             var sb = new StringBuilder();
-            bool prevWasLower = false;
-            foreach (var c in tableName)
+
+            if (tableName.IndexOf('_') >= 0)
             {
-                if (char.IsUpper(c) || sb.Length == 0)
+                var tokens = tableName.Split(new[] { '_' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (var token in tokens)
                 {
-                    sb.Append(char.ToLowerInvariant(c));
-                    prevWasLower = false;
+                    if (!string.IsNullOrEmpty(token))
+                        sb.Append(char.ToLowerInvariant(token[0]));
                 }
-                else
+            }
+            else
+            {
+                for (int i = 0; i < tableName.Length; i++)
                 {
-                    prevWasLower = char.IsLower(c);
+                    char c = tableName[i];
+                    if (!char.IsLetterOrDigit(c))
+                        continue;
+
+                    bool isWordStart =
+                        i == 0 ||
+                        !char.IsLetterOrDigit(tableName[i - 1]) ||
+                        (char.IsUpper(c) && char.IsLetter(tableName[i - 1]) && char.IsLower(tableName[i - 1]));
+
+                    if (isWordStart)
+                        sb.Append(char.ToLowerInvariant(c));
                 }
             }
 
@@ -988,11 +1038,44 @@ namespace OpenHintSQL.Completion
                         }
                     }
                 }
+
+                if (ShouldUseFuzzyFallback(prefix, results.Count))
+                {
+                    foreach (var proc in schema.Procedures.Values)
+                    {
+                        if (!IsFuzzyProcedureMatch(proc, prefix))
+                            continue;
+
+                        var kind = proc.ObjectType != null && proc.ObjectType.Contains("FUNCTION")
+                            ? CompletionItemKind.Function
+                            : CompletionItemKind.Procedure;
+                        var label = kind == CompletionItemKind.Function ? "Function" : "Procedure";
+
+                        results.Add(new CompletionItemData
+                        {
+                            Text = proc.FullName,
+                            InsertText = proc.Name,
+                            Description = $"{label}: {proc.FullName}",
+                            Kind = kind,
+                            Priority = 1,
+                            IconKey = label
+                        });
+                    }
+                }
             }
             catch (Exception ex)
             {
                 Logger.Error("AddProcedures failed", ex);
             }
+        }
+
+        private static bool IsFuzzyProcedureMatch(ProcedureInfo proc, string prefix)
+        {
+            if (proc == null)
+                return false;
+
+            return IsFuzzyMatch(proc.FullName, prefix) ||
+                   IsFuzzyMatch(proc.Name, prefix);
         }
 
         /// <summary>
@@ -1096,11 +1179,128 @@ namespace OpenHintSQL.Completion
                     return true;
             }
 
+            // Token-aware match for names like dbo.TT_TIEPNHAN or [dbo].[TT_TIEPNHAN].
+            // This lets users search by the meaningful part without typing technical prefixes.
+            foreach (var term in GetSearchTerms(name))
+            {
+                if (term.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
             // Substring match for flexibility
             if (name.IndexOf(prefix, StringComparison.OrdinalIgnoreCase) >= 0)
                 return true;
 
             return false;
+        }
+
+        private static bool ShouldUseFuzzyFallback(string prefix, int directResultsCount)
+        {
+            return !string.IsNullOrWhiteSpace(prefix) &&
+                   prefix.Length >= MinFuzzyPrefixLength &&
+                   directResultsCount < MinDirectResultsBeforeFuzzy;
+        }
+
+        private static IEnumerable<string> GetSearchTerms(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                yield break;
+
+            foreach (var part in name.Split(new[] { '.', '_', '[', ']', ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                yield return part;
+            }
+        }
+
+        private static bool IsFuzzyMatch(string name, string prefix)
+        {
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(prefix))
+                return false;
+
+            foreach (var term in GetSearchTerms(name))
+            {
+                if (IsFuzzyTokenMatch(term, prefix))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsFuzzyTokenMatch(string candidate, string prefix)
+        {
+            if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(prefix))
+                return false;
+
+            if (candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var normalizedCandidate = candidate.ToLowerInvariant();
+            var normalizedPrefix = prefix.ToLowerInvariant();
+
+            if (normalizedCandidate.Length < MinFuzzyPrefixLength ||
+                normalizedPrefix.Length < MinFuzzyPrefixLength)
+            {
+                return false;
+            }
+
+            var candidateSliceLength = Math.Min(normalizedCandidate.Length, normalizedPrefix.Length + 1);
+            var candidateSlice = normalizedCandidate.Substring(0, candidateSliceLength);
+            var maxDistance = normalizedPrefix.Length >= 7 ? 2 : 1;
+
+            return GetEditDistance(candidateSlice, normalizedPrefix, maxDistance) <= maxDistance;
+        }
+
+        private static int GetEditDistance(string left, string right, int maxDistance)
+        {
+            if (string.IsNullOrEmpty(left))
+                return string.IsNullOrEmpty(right) ? 0 : right.Length;
+            if (string.IsNullOrEmpty(right))
+                return left.Length;
+
+            if (Math.Abs(left.Length - right.Length) > maxDistance)
+                return maxDistance + 1;
+
+            var previous = new int[right.Length + 1];
+            var current = new int[right.Length + 1];
+            var previousPrevious = new int[right.Length + 1];
+
+            for (int j = 0; j <= right.Length; j++)
+                previous[j] = j;
+
+            for (int i = 1; i <= left.Length; i++)
+            {
+                current[0] = i;
+                int rowMin = current[0];
+
+                for (int j = 1; j <= right.Length; j++)
+                {
+                    int substitutionCost = left[i - 1] == right[j - 1] ? 0 : 1;
+                    int value = Math.Min(
+                        Math.Min(previous[j] + 1, current[j - 1] + 1),
+                        previous[j - 1] + substitutionCost);
+
+                    if (i > 1 && j > 1 &&
+                        left[i - 1] == right[j - 2] &&
+                        left[i - 2] == right[j - 1])
+                    {
+                        value = Math.Min(value, previousPrevious[j - 2] + 1);
+                    }
+
+                    current[j] = value;
+                    if (value < rowMin)
+                        rowMin = value;
+                }
+
+                if (rowMin > maxDistance)
+                    return maxDistance + 1;
+
+                var temp = previousPrevious;
+                previousPrevious = previous;
+                previous = current;
+                current = temp;
+            }
+
+            return previous[right.Length];
         }
 
         /// <summary>

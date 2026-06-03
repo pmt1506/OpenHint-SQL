@@ -10,9 +10,9 @@
 
 #define AppName      "OpenHint SQL"
 #define AppId        "OpenHintSQL.63D8CFAD-D1FF-40EB-80DB-7728DEDD7A91"
-#define AppVersion   "1.0.1"
+#define AppVersion   "1.0.2"
 #define AppPublisher "OpenHintSQL"
-#define AppURL       "https://github.com/Jarvis81/OpenHint-SQL"
+#define AppURL       "https://github.com/pmt1506/OpenHint-SQL"
 #define ExtSubdir    "Extensions\OpenHintSQL"
 #define BuildDir     "..\src\OpenHintSQL\bin\Release\net48"
 
