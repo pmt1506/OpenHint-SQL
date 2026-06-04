@@ -903,11 +903,8 @@ namespace OpenHintSQL.Completion
                 return null;
 
             var settings = SettingsProvider.GetSettings();
-            if (settings.OmitDboSchemaOnInsert &&
-                string.Equals(table.SchemaName, "dbo", StringComparison.OrdinalIgnoreCase))
-            {
+            if (settings.OmitDboSchemaOnInsert)
                 return table.Name;
-            }
 
             return table.BracketedName;
         }

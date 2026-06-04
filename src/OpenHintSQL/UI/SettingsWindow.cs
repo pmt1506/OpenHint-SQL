@@ -1,5 +1,5 @@
-using System.Linq;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -11,7 +11,7 @@ namespace OpenHintSQL.UI
 {
     internal sealed class SettingsWindow : Window
     {
-        private readonly CheckBox _omitDboCheckBox;
+        private readonly CheckBox _omitSchemaCheckBox;
         private readonly ObservableCollection<CustomSnippetRow> _rows;
         private readonly DataGrid _grid;
 
@@ -47,13 +47,13 @@ namespace OpenHintSQL.UI
                 Margin = new Thickness(0, 0, 0, 12)
             });
 
-            _omitDboCheckBox = new CheckBox
+            _omitSchemaCheckBox = new CheckBox
             {
-                Content = "Bỏ schema dbo khi insert table/view",
+                Content = "Bỏ tên schema ở phía trước",
                 IsChecked = settings.OmitDboSchemaOnInsert,
                 Margin = new Thickness(0, 0, 0, 20)
             };
-            content.Children.Add(_omitDboCheckBox);
+            content.Children.Add(_omitSchemaCheckBox);
 
             content.Children.Add(new TextBlock
             {
@@ -65,7 +65,7 @@ namespace OpenHintSQL.UI
 
             content.Children.Add(new TextBlock
             {
-                Text = "Thêm viết tắt kiểu ssf -> SELECT * FROM. Expansion hỗ trợ $cursor$ và \\n.",
+                Text = "Them viet tat kieu ssf -> SELECT * FROM. Expansion ho tro $cursor$ va \\n.",
                 Foreground = new SolidColorBrush(Color.FromRgb(87, 96, 106)),
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 10)
@@ -76,11 +76,23 @@ namespace OpenHintSQL.UI
                 Orientation = Orientation.Horizontal,
                 Margin = new Thickness(0, 0, 0, 8)
             };
-            var addButton = new Button { Content = "Thêm dòng", MinWidth = 96, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 4, 12, 4) };
+
+            var addButton = new Button
+            {
+                Content = "Thêm dòng",
+                MinWidth = 96,
+                Margin = new Thickness(0, 0, 8, 0),
+                Padding = new Thickness(12, 4, 12, 4)
+            };
             addButton.Click += (_, __) => _rows.Add(new CustomSnippetRow());
             toolbar.Children.Add(addButton);
 
-            var removeButton = new Button { Content = "Xóa dòng", MinWidth = 96, Padding = new Thickness(12, 4, 12, 4) };
+            var removeButton = new Button
+            {
+                Content = "Xóa dòng",
+                MinWidth = 96,
+                Padding = new Thickness(12, 4, 12, 4)
+            };
             removeButton.Click += (_, __) =>
             {
                 if (_grid.SelectedItem is CustomSnippetRow row)
@@ -134,7 +146,7 @@ namespace OpenHintSQL.UI
             var panel = new DockPanel { Margin = new Thickness(0, 14, 0, 0), LastChildFill = false };
             var hint = new TextBlock
             {
-                Text = "Mở bằng Ctrl+Alt+Q trong query editor.",
+                Text = "Mo bang Ctrl+Alt+Q trong query editor.",
                 Foreground = new SolidColorBrush(Color.FromRgb(87, 96, 106)),
                 VerticalAlignment = VerticalAlignment.Center
             };
@@ -142,10 +154,23 @@ namespace OpenHintSQL.UI
             panel.Children.Add(hint);
 
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            var cancelButton = new Button { Content = "Hủy", MinWidth = 88, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 5, 12, 5), IsCancel = true };
+            var cancelButton = new Button
+            {
+                Content = "Huỷ",
+                MinWidth = 88,
+                Margin = new Thickness(0, 0, 8, 0),
+                Padding = new Thickness(12, 5, 12, 5),
+                IsCancel = true
+            };
             buttons.Children.Add(cancelButton);
 
-            var saveButton = new Button { Content = "Lưu", MinWidth = 88, Padding = new Thickness(12, 5, 12, 5), IsDefault = true };
+            var saveButton = new Button
+            {
+                Content = "Lưu",
+                MinWidth = 88,
+                Padding = new Thickness(12, 5, 12, 5),
+                IsDefault = true
+            };
             saveButton.Click += (_, __) => SaveAndClose();
             buttons.Children.Add(saveButton);
 
@@ -158,7 +183,7 @@ namespace OpenHintSQL.UI
         {
             var settings = new OpenHintSqlSettings
             {
-                OmitDboSchemaOnInsert = _omitDboCheckBox.IsChecked == true
+                OmitDboSchemaOnInsert = _omitSchemaCheckBox.IsChecked == true
             };
 
             foreach (var row in _rows)
