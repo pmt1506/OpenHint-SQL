@@ -31,7 +31,7 @@ OpenHint SQL targets SSMS 18 through SSMS 22.
 
 ### Option A - Installer
 
-1. Download `OpenHintSQLSetup-1.0.2.exe` from the [v1.0.2 release](https://github.com/pmt1506/OpenHint-SQL/releases/tag/v1.0.2).
+1. Download `OpenHintSQLSetup-1.0.3.exe` from the [v1.0.3 release](https://github.com/pmt1506/OpenHint-SQL/releases/tag/v1.0.3).
 2. Close SSMS.
 3. Run the installer as Administrator.
 4. Reopen SSMS and start typing in a query window.
@@ -64,7 +64,7 @@ To build the installer:
 scripts\build-installer.bat
 ```
 
-This writes `dist\OpenHintSQLSetup-1.0.2.exe`.
+This writes `dist\OpenHintSQLSetup-1.0.3.exe`.
 
 ## Usage
 
