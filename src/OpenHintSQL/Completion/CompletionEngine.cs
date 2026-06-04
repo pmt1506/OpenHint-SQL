@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using OpenHintSQL.Context;
 using OpenHintSQL.Providers;
 using OpenHintSQL.Schema;
+using OpenHintSQL.Settings;
 using OpenHintSQL.Snippets;
 using OpenHintSQL.Utils;
 
@@ -568,10 +569,10 @@ namespace OpenHintSQL.Completion
         private static string BuildObjectInsertText(TableInfo table, bool includeAlias, HashSet<string> usedAliases)
         {
             if (!includeAlias || table == null)
-                return table?.BracketedName;
+                return GetObjectInsertName(table);
 
             var alias = GenerateAlias(table.Name, usedAliases ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-            return $"{table.BracketedName} {alias}";
+            return $"{GetObjectInsertName(table)} {alias}";
         }
 
         private static bool MatchesTablePrefix(TableInfo table, string prefix)
@@ -756,8 +757,8 @@ namespace OpenHintSQL.Completion
 
             // Display text shows what the user will get; InsertText starts at the table
             // reference because the leading JOIN keyword is preserved from the query text.
-            string display = $"{targetTable.BracketedName} {newAlias} ON {on}";
-            string insert = $"{targetTable.BracketedName} {newAlias} ON {on}";
+            string display = $"{GetObjectInsertName(targetTable)} {newAlias} ON {on}";
+            string insert = $"{GetObjectInsertName(targetTable)} {newAlias} ON {on}";
 
             // For empty-prefix JOIN trigger, InsertText is spliced at the caret position
             // immediately after the trailing space of "JOIN ".
@@ -894,6 +895,21 @@ namespace OpenHintSQL.Completion
             }
 
             return baseAlias + Guid.NewGuid().ToString("N").Substring(0, 4);
+        }
+
+        private static string GetObjectInsertName(TableInfo table)
+        {
+            if (table == null)
+                return null;
+
+            var settings = SettingsProvider.GetSettings();
+            if (settings.OmitDboSchemaOnInsert &&
+                string.Equals(table.SchemaName, "dbo", StringComparison.OrdinalIgnoreCase))
+            {
+                return table.Name;
+            }
+
+            return table.BracketedName;
         }
 
         /// <summary>

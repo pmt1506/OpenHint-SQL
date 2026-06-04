@@ -35,6 +35,7 @@ set "INSTALLER_SCRIPT=%REPO_ROOT%\installer\OpenHintSQL.iss"
 set "DIST_DIR=%REPO_ROOT%\dist"
 set "ISCC_DEFAULT_X86=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 set "ISCC_DEFAULT_X64=%ProgramFiles%\Inno Setup 6\ISCC.exe"
+set "MSBUILD_EXE="
 set "NO_PAUSE=0"
 if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
 if /I "%~1"=="/no-pause" set "NO_PAUSE=1"
@@ -47,7 +48,12 @@ echo.
 
 REM Step 1: Build Release
 echo  [1/5] Building Release...
-dotnet build "%REPO_ROOT%\src\OpenHintSQL\OpenHintSQL.csproj" -c Release --nologo -v quiet
+call :find_msbuild
+if defined MSBUILD_EXE (
+    "%MSBUILD_EXE%" "%REPO_ROOT%\src\OpenHintSQL\OpenHintSQL.csproj" /t:Restore,Build /p:Configuration=Release /nologo /verbosity:quiet
+) else (
+    dotnet build "%REPO_ROOT%\src\OpenHintSQL\OpenHintSQL.csproj" -c Release --nologo -v quiet
+)
 if %ERRORLEVEL% neq 0 (
     echo  ERROR: Build failed. Fix compilation errors before packaging.
     goto :fail
@@ -197,3 +203,14 @@ exit /b 1
 :end
 if not "%NO_PAUSE%"=="1" pause
 exit /b 0
+
+:find_msbuild
+if exist "%ProgramFiles%\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" (
+    set "MSBUILD_EXE=%ProgramFiles%\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+    goto :eof
+)
+
+for /f "delims=" %%I in ('where msbuild.exe 2^>nul') do (
+    if not defined MSBUILD_EXE set "MSBUILD_EXE=%%~I"
+)
+goto :eof

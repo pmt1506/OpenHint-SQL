@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using Newtonsoft.Json;
 using OpenHintSQL.Providers;
+using OpenHintSQL.Settings;
 using OpenHintSQL.Utils;
 
 namespace OpenHintSQL.Snippets
@@ -36,7 +37,7 @@ namespace OpenHintSQL.Snippets
         private const string SnippetFileName = "Config\\snippets.json";
 
         private readonly Dictionary<string, SnippetDefinition> _shortcuts;
-        private readonly SnippetDefinition[] _allSnippets;
+        private SnippetDefinition[] _allSnippets;
 
         // ──────────────────────────────────────────────
         //  Thread-safe lazy singleton
@@ -55,6 +56,13 @@ namespace OpenHintSQL.Snippets
         private SnippetProvider()
         {
             _shortcuts = new Dictionary<string, SnippetDefinition>(StringComparer.OrdinalIgnoreCase);
+            _allSnippets = Array.Empty<SnippetDefinition>();
+            Reload();
+        }
+
+        public void Reload()
+        {
+            _shortcuts.Clear();
             _allSnippets = Array.Empty<SnippetDefinition>();
 
             try
@@ -87,6 +95,23 @@ namespace OpenHintSQL.Snippets
 
                     // Last-one-wins for duplicate shortcuts
                     _shortcuts[snippet.Shortcut] = snippet;
+                }
+
+                foreach (var customSnippet in SettingsProvider.GetSettings().CustomSnippets)
+                {
+                    if (string.IsNullOrWhiteSpace(customSnippet.Shortcut) ||
+                        string.IsNullOrWhiteSpace(customSnippet.Expansion))
+                    {
+                        continue;
+                    }
+
+                    _shortcuts[customSnippet.Shortcut] = new SnippetDefinition
+                    {
+                        Shortcut = customSnippet.Shortcut,
+                        Title = customSnippet.Shortcut,
+                        Expansion = customSnippet.Expansion,
+                        Description = customSnippet.Description
+                    };
                 }
 
                 _allSnippets = _shortcuts.Values.ToArray();

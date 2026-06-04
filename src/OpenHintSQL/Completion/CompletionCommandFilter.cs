@@ -1,6 +1,8 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Windows;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Language.Intellisense;
@@ -73,6 +75,7 @@ namespace OpenHintSQL.Completion
             // Dismiss popup when the editor loses focus
             _textView.LostAggregateFocus += OnEditorLostFocus;
             _textView.Closed += OnEditorClosed;
+            _textView.VisualElement.PreviewKeyDown += OnPreviewKeyDown;
 
             // Refresh the popup once the schema finishes loading in the background — this is
             // what makes the very first table-completion attempt work after a cold cache.
@@ -236,14 +239,6 @@ namespace OpenHintSQL.Completion
                 }
                 else if (pguidCmdGroup == VSConstants.GUID_VSStandardCommandSet97)
                 {
-                    // SSMS 18/19 might use VSStd97 for some basic navigation/edit commands
-                    switch (nCmdID)
-                    {
-                        case 1: // Common ID for Tab in some shells? Actually Tab is usually VSStd2K.
-                                // But if SSMS 18 sends Tab via VSStd97, we catch it here.
-                                // Let's check common VSStd97 IDs: 3=Return, 40=Tab?
-                            break;
-                    }
                 }
             }
             catch (Exception ex)
@@ -1002,6 +997,23 @@ namespace OpenHintSQL.Completion
             }
         }
 
+        private void OnPreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            try
+            {
+                if (e.Key == Key.Q &&
+                    Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Alt))
+                {
+                    ShowSettingsWindow();
+                    e.Handled = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("OnPreviewKeyDown failed", ex);
+            }
+        }
+
         /// <summary>
         /// Handles editor being closed — clean up resources.
         /// </summary>
@@ -1036,6 +1048,7 @@ namespace OpenHintSQL.Completion
                 {
                     _textView.LostAggregateFocus -= OnEditorLostFocus;
                     _textView.Closed -= OnEditorClosed;
+                    _textView.VisualElement.PreviewKeyDown -= OnPreviewKeyDown;
                 }
 
                 Logger.Log("CompletionCommandFilter cleaned up.");
@@ -1044,6 +1057,11 @@ namespace OpenHintSQL.Completion
             {
                 Logger.Error("OnEditorClosed cleanup failed", ex);
             }
+        }
+
+        private void ShowSettingsWindow()
+        {
+            SettingsWindow.Show(Window.GetWindow(_textView.VisualElement));
         }
     }
 }

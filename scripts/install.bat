@@ -16,6 +16,7 @@ for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
 set "BUILD_DIR=%REPO_ROOT%\src\OpenHintSQL\bin\Release\net48"
 set "TARGET_VERSION=%~1"
 set "BUILD_LOG=%TEMP%\OpenHintSQL-build.log"
+set "MSBUILD_EXE="
 
 echo.
 echo  OpenHintSQL Install Script
@@ -39,8 +40,13 @@ if %ERRORLEVEL% equ 0 (
 )
 
 REM ── Auto-build project ─────────────────────────────────────
+call :find_msbuild
 echo  Building OpenHintSQL (Release)...
-dotnet build "%REPO_ROOT%\src\OpenHintSQL\OpenHintSQL.csproj" -c Release --nologo --verbosity:minimal > "%BUILD_LOG%" 2>&1
+if defined MSBUILD_EXE (
+    "%MSBUILD_EXE%" "%REPO_ROOT%\src\OpenHintSQL\OpenHintSQL.csproj" /t:Restore,Build /p:Configuration=Release /nologo /verbosity:minimal > "%BUILD_LOG%" 2>&1
+) else (
+    dotnet build "%REPO_ROOT%\src\OpenHintSQL\OpenHintSQL.csproj" -c Release --nologo --verbosity:minimal > "%BUILD_LOG%" 2>&1
+)
 if %ERRORLEVEL% neq 0 (
     echo  ERROR: Build failed! Check the errors above.
     type "%BUILD_LOG%"
@@ -144,6 +150,20 @@ for /D %%C in ("%LOCALAPPDATA%\Microsoft\SSMS\%V%.0_*") do (
 
 echo  SSMS %V% : installed successfully.
 set /A INSTALLED+=1
+goto :eof
+
+
+REM ============================================================
+:find_msbuild
+REM ============================================================
+if exist "%ProgramFiles%\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" (
+    set "MSBUILD_EXE=%ProgramFiles%\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+    goto :eof
+)
+
+for /f "delims=" %%I in ('where msbuild.exe 2^>nul') do (
+    if not defined MSBUILD_EXE set "MSBUILD_EXE=%%~I"
+)
 goto :eof
 
 
