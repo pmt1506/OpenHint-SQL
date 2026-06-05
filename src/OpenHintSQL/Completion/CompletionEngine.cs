@@ -1351,6 +1351,7 @@ namespace OpenHintSQL.Completion
                         Description = col.DisplayText,
                         Kind = CompletionItemKind.Column,
                         Priority = 5,
+                        SortOrder = results.Count,
                         IconKey = "Column"
                     });
                 }
@@ -1864,6 +1865,7 @@ namespace OpenHintSQL.Completion
             var sorted = deduplicated
                 .OrderByDescending(item => GetPrefixRelevance(item, prefix))
                 .ThenByDescending(item => item.Priority)
+                .ThenBy(item => item.SortOrder ?? int.MaxValue)
                 .ThenBy(item => item.Text, StringComparer.OrdinalIgnoreCase)
                 .Take(MaxResults)
                 .ToList();

@@ -43,6 +43,12 @@ namespace OpenHintSQL.Providers
         /// <summary>Sort priority — lower values appear first in the list.</summary>
         public int Priority { get; set; }
 
+        /// <summary>
+        /// Optional stable ordering hint used before alphabetical sorting.
+        /// Lower values appear earlier. Null means there is no explicit order.
+        /// </summary>
+        public int? SortOrder { get; set; }
+
         /// <summary>Key used to select the appropriate icon for this item.</summary>
         public string IconKey { get; set; }
 
