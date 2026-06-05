@@ -13,11 +13,12 @@ namespace OpenHintSQL.Schema
     internal static class AsyncSchemaLoader
     {
         /// <summary>
-        /// SQL batch that returns four result sets:
+        /// SQL batch that returns five result sets:
         ///   Result 1: Tables/Views with their columns
         ///   Result 2: Stored procedures and functions
-        ///   Result 3: Primary-key columns (one row per PK column, in key_ordinal order)
-        ///   Result 4: Foreign-key columns (one row per FK column, in constraint_column_id order)
+        ///   Result 3: Procedure/function parameters
+        ///   Result 4: Primary-key columns (one row per PK column, in key_ordinal order)
+        ///   Result 5: Foreign-key columns (one row per FK column, in constraint_column_id order)
         /// </summary>
         private const string SchemaQuery = @"
 -- Result 1: Tables and Views with columns
@@ -50,7 +51,23 @@ WHERE o.is_ms_shipped = 0
   AND o.type IN ('P', 'FN', 'IF', 'TF')
 ORDER BY s.name, o.name;
 
--- Result 3: Primary-key columns
+-- Result 3: Procedure/function parameters
+SELECT
+    s.name             AS schema_name,
+    o.name             AS object_name,
+    p.parameter_id,
+    p.name             AS parameter_name,
+    tp.name            AS data_type,
+    p.is_output
+FROM sys.objects o
+INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+INNER JOIN sys.parameters p ON o.object_id = p.object_id
+INNER JOIN sys.types tp ON p.user_type_id = tp.user_type_id
+WHERE o.is_ms_shipped = 0
+  AND o.type IN ('P', 'FN', 'IF', 'TF')
+ORDER BY s.name, o.name, p.parameter_id;
+
+-- Result 4: Primary-key columns
 SELECT
     s.name   AS schema_name,
     t.name   AS table_name,
@@ -65,7 +82,7 @@ WHERE i.is_primary_key = 1
   AND t.is_ms_shipped = 0
 ORDER BY s.name, t.name, ic.key_ordinal;
 
--- Result 4: Foreign-key columns
+-- Result 5: Foreign-key columns
 SELECT
     fk.name                          AS fk_name,
     fkc.constraint_column_id         AS col_ordinal,
@@ -169,7 +186,33 @@ ORDER BY fk.name, fkc.constraint_column_id;
                                 }
                             }
 
-                            // ----- Result set 3: Primary-key columns -----
+                            // ----- Result set 3: Procedure/function parameters -----
+                            if (await reader.NextResultAsync().ConfigureAwait(false))
+                            {
+                                while (await reader.ReadAsync().ConfigureAwait(false))
+                                {
+                                    var schemaName = reader.GetString(0);
+                                    var objectName = reader.GetString(1);
+                                    var ordinal = reader.GetInt32(2);
+                                    var parameterName = reader.GetString(3);
+                                    var dataType = reader.GetString(4);
+                                    var isOutput = reader.GetBoolean(5);
+
+                                    var fullName = $"{schemaName}.{objectName}";
+                                    if (!schema.Procedures.TryGetValue(fullName, out var proc))
+                                        continue;
+
+                                    proc.Parameters.Add(new ProcedureParameterInfo
+                                    {
+                                        Name = parameterName,
+                                        DataType = dataType,
+                                        OrdinalPosition = ordinal,
+                                        IsOutput = isOutput
+                                    });
+                                }
+                            }
+
+                            // ----- Result set 4: Primary-key columns -----
                             // Tag the matching ColumnInfo (already loaded in result 1) as PK.
                             if (await reader.NextResultAsync().ConfigureAwait(false))
                             {
@@ -193,7 +236,7 @@ ORDER BY fk.name, fkc.constraint_column_id;
                                 }
                             }
 
-                            // ----- Result set 4: Foreign-key columns -----
+                            // ----- Result set 5: Foreign-key columns -----
                             // Stage raw rows on DatabaseSchema; resolved into object refs by Build().
                             if (await reader.NextResultAsync().ConfigureAwait(false))
                             {

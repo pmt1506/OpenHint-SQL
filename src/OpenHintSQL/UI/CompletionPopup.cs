@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -8,6 +9,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.VisualStudio.Text.Editor;
 using OpenHintSQL.Providers;
@@ -60,6 +62,14 @@ namespace OpenHintSQL.UI
 
         private const double PopupMaxHeight = 300;
         private const double PopupWidth = 440;
+        private const double DetailPopupMinWidth = 240;
+        private const double DetailPopupPreferredWidth = 320;
+        private const double DetailPopupMaxWidth = 420;
+        private const double DetailPopupPreferredMaxHeight = 320;
+        private const double DetailPopupMaxHeight = 380;
+        private const double DetailPopupGap = 4;
+        private const double DetailPopupViewportMargin = 14;
+        private const double DetailPopupMinHeight = 96;
         private const double FadeInDurationMs = 120;
 
         // ═══════════════════════════════════════════════════════════════
@@ -67,8 +77,14 @@ namespace OpenHintSQL.UI
         // ═══════════════════════════════════════════════════════════════
 
         private readonly Popup _popup;
+        private readonly Popup _detailPopup;
         private readonly ListBox _listBox;
         private readonly Border _border;
+        private readonly Border _detailBorder;
+        private readonly ScrollViewer _detailScrollViewer;
+        private readonly TextBlock _detailTitleText;
+        private readonly TextBlock _detailMetaText;
+        private readonly TextBlock _detailDescriptionText;
 
         // ═══════════════════════════════════════════════════════════════
         //  STATE
@@ -157,6 +173,8 @@ namespace OpenHintSQL.UI
 
             // Build the ListBox with virtualization
             _listBox = CreateListBox();
+            _listBox.SelectionChanged += (s, e) => UpdateDetailPopupForSelection();
+            _listBox.MouseMove += OnListBoxMouseMove;
 
             // Wrap in a border for styling
             _border = new Border
@@ -186,6 +204,77 @@ namespace OpenHintSQL.UI
                 StaysOpen = false,
                 Focusable = false,
                 PopupAnimation = PopupAnimation.None // We handle animation manually
+            };
+
+            _detailTitleText = new TextBlock
+            {
+                Foreground = ForegroundBrush,
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                FontFamily = new FontFamily("Consolas"),
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            _detailMetaText = new TextBlock
+            {
+                Foreground = DescriptionBrush,
+                FontSize = 11.5,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 6, 0, 8),
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            _detailDescriptionText = new TextBlock
+            {
+                Foreground = ForegroundBrush,
+                FontSize = 12,
+                FontFamily = new FontFamily("Consolas"),
+                LineHeight = 18,
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            var detailStack = new StackPanel
+            {
+                Margin = new Thickness(14, 12, 14, 12)
+            };
+            detailStack.Children.Add(_detailTitleText);
+            detailStack.Children.Add(_detailMetaText);
+            detailStack.Children.Add(_detailDescriptionText);
+
+            _detailScrollViewer = new ScrollViewer
+            {
+                Content = detailStack,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                MaxHeight = DetailPopupPreferredMaxHeight - 8
+            };
+
+            _detailBorder = new Border
+            {
+                Background = BackgroundBrush,
+                BorderBrush = BorderBrush_,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Child = _detailScrollViewer,
+                Width = DetailPopupPreferredWidth,
+                MaxHeight = DetailPopupPreferredMaxHeight,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    BlurRadius = 12,
+                    ShadowDepth = 2,
+                    Opacity = 0.14
+                }
+            };
+
+            _detailPopup = new Popup
+            {
+                Child = _detailBorder,
+                AllowsTransparency = true,
+                Placement = PlacementMode.AbsolutePoint,
+                StaysOpen = false,
+                Focusable = false,
+                PopupAnimation = PopupAnimation.None
             };
 
             // Prevent the popup from stealing focus
@@ -246,6 +335,7 @@ namespace OpenHintSQL.UI
 
                     ResetHorizontalScroll();
                     PositionAtCaret();
+                    UpdateDetailPopupForSelection();
 
                     // Show with fade-in animation
                     _border.Opacity = 0;
@@ -275,6 +365,7 @@ namespace OpenHintSQL.UI
                 try
                 {
                     _popup.IsOpen = false;
+                    _detailPopup.IsOpen = false;
                     _currentView = null;
                     _allItems = new List<CompletionItemData>();
                     _filteredItems = new List<CompletionItemData>();
@@ -402,17 +493,19 @@ namespace OpenHintSQL.UI
                             item.Text != null &&
                             item.Text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 
-                        _listBox.SelectedItem = bestMatch ?? _filteredItems[0];
-                        _listBox.ScrollIntoView(_listBox.SelectedItem);
-                        ResetHorizontalScroll();
-                        QueueResetHorizontalScroll();
-                    }
+                    _listBox.SelectedItem = bestMatch ?? _filteredItems[0];
+                    _listBox.ScrollIntoView(_listBox.SelectedItem);
+                    ResetHorizontalScroll();
+                    QueueResetHorizontalScroll();
+                    UpdateDetailPopupForSelection();
+                }
 
-                    // If no items match, hide the popup
-                    if (_filteredItems.Count == 0)
-                    {
-                        _popup.IsOpen = false;
-                    }
+                // If no items match, hide the popup
+                if (_filteredItems.Count == 0)
+                {
+                    _popup.IsOpen = false;
+                    _detailPopup.IsOpen = false;
+                }
                 }
                 catch (Exception ex)
                 {
@@ -460,6 +553,7 @@ namespace OpenHintSQL.UI
 
             // Single click selection
             listBox.PreviewMouseLeftButtonDown += OnListBoxPreviewMouseDown;
+            listBox.MouseLeave += OnListBoxMouseLeave;
 
             return listBox;
         }
@@ -472,36 +566,59 @@ namespace OpenHintSQL.UI
         {
             var template = new DataTemplate(typeof(CompletionItemData));
 
+            var rowBorderFactory = new FrameworkElementFactory(typeof(Border));
+            rowBorderFactory.SetBinding(Border.BackgroundProperty,
+                new System.Windows.Data.Binding("RowTintBrush"));
+            rowBorderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+            rowBorderFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(0));
+            rowBorderFactory.SetValue(Border.PaddingProperty, new Thickness(0));
+            rowBorderFactory.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
+
             // Root: horizontal StackPanel
             var stackFactory = new FrameworkElementFactory(typeof(StackPanel));
             stackFactory.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
-            stackFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(2, 1, 2, 1));
+            stackFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(8, 4, 8, 4));
 
             // Compact kind badge
             var badgeFactory = new FrameworkElementFactory(typeof(Border));
-            badgeFactory.SetValue(Border.BackgroundProperty, IconBackgroundBrush);
+            badgeFactory.SetBinding(Border.BackgroundProperty,
+                new System.Windows.Data.Binding("BadgeBackgroundBrush"));
             badgeFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
             badgeFactory.SetValue(FrameworkElement.WidthProperty, 22.0);
             badgeFactory.SetValue(FrameworkElement.HeightProperty, 18.0);
             badgeFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(4, 1, 8, 1));
             badgeFactory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
 
-            var iconFactory = new FrameworkElementFactory(typeof(TextBlock));
-            iconFactory.SetBinding(TextBlock.TextProperty,
-                new System.Windows.Data.Binding("KindGlyph"));
-            iconFactory.SetValue(TextBlock.ForegroundProperty, IconForegroundBrush);
-            iconFactory.SetValue(TextBlock.FontSizeProperty, 10.0);
-            iconFactory.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
-            iconFactory.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-            iconFactory.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            var iconFactory = new FrameworkElementFactory(typeof(Path));
+            iconFactory.SetBinding(Path.DataProperty,
+                new System.Windows.Data.Binding("IconGeometry"));
+            iconFactory.SetBinding(Shape.FillProperty,
+                new System.Windows.Data.Binding("BadgeForegroundBrush"));
+            iconFactory.SetValue(FrameworkElement.WidthProperty, 12.0);
+            iconFactory.SetValue(FrameworkElement.HeightProperty, 12.0);
+            iconFactory.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            iconFactory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            iconFactory.SetValue(Path.StretchProperty, Stretch.Uniform);
             badgeFactory.AppendChild(iconFactory);
             stackFactory.AppendChild(badgeFactory);
+
+            var favoriteFactory = new FrameworkElementFactory(typeof(TextBlock));
+            favoriteFactory.SetBinding(TextBlock.TextProperty,
+                new System.Windows.Data.Binding("FavoriteMarker"));
+            favoriteFactory.SetBinding(TextBlock.ForegroundProperty,
+                new System.Windows.Data.Binding("FavoriteBrush"));
+            favoriteFactory.SetValue(TextBlock.FontSizeProperty, 12.0);
+            favoriteFactory.SetValue(TextBlock.FontWeightProperty, FontWeights.Bold);
+            favoriteFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 6, 0));
+            favoriteFactory.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            stackFactory.AppendChild(favoriteFactory);
 
             // Main text TextBlock
             var textFactory = new FrameworkElementFactory(typeof(TextBlock));
             textFactory.SetBinding(TextBlock.TextProperty,
                 new System.Windows.Data.Binding("Text"));
-            textFactory.SetValue(TextBlock.ForegroundProperty, ForegroundBrush);
+            textFactory.SetBinding(TextBlock.ForegroundProperty,
+                new System.Windows.Data.Binding("PrimaryTextBrush"));
             textFactory.SetValue(TextBlock.FontSizeProperty, 12.5);
             textFactory.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
             textFactory.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Consolas"));
@@ -520,7 +637,8 @@ namespace OpenHintSQL.UI
             descFactory.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
             stackFactory.AppendChild(descFactory);
 
-            template.VisualTree = stackFactory;
+            rowBorderFactory.AppendChild(stackFactory);
+            template.VisualTree = rowBorderFactory;
             return template;
         }
 
@@ -539,6 +657,7 @@ namespace OpenHintSQL.UI
             style.Setters.Add(new Setter(Control.MarginProperty, new Thickness(2, 1, 2, 1)));
             style.Setters.Add(new Setter(Control.MinHeightProperty, 26.0));
             style.Setters.Add(new Setter(UIElement.FocusableProperty, false));
+            style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
 
             // Selected state trigger
             var selectedTrigger = new Trigger
@@ -550,14 +669,14 @@ namespace OpenHintSQL.UI
             selectedTrigger.Setters.Add(new Setter(Control.ForegroundProperty, ForegroundBrush));
             style.Triggers.Add(selectedTrigger);
 
-            // Mouse over trigger
-            var mouseOverTrigger = new Trigger
+            var hoverTrigger = new Trigger
             {
-                Property = UIElement.IsMouseOverProperty,
+                Property = ListBoxItem.IsMouseOverProperty,
                 Value = true
             };
-            mouseOverTrigger.Setters.Add(new Setter(Control.BackgroundProperty, HoverBrush));
-            style.Triggers.Add(mouseOverTrigger);
+            hoverTrigger.Setters.Add(new Setter(Control.BackgroundProperty, HoverBrush));
+            hoverTrigger.Setters.Add(new Setter(Control.ForegroundProperty, ForegroundBrush));
+            style.Triggers.Add(hoverTrigger);
 
             return style;
         }
@@ -607,6 +726,35 @@ namespace OpenHintSQL.UI
             }
         }
 
+        private void OnListBoxMouseMove(object sender, MouseEventArgs e)
+        {
+            try
+            {
+                var element = e.OriginalSource as DependencyObject;
+                while (element != null && !(element is ListBoxItem))
+                    element = VisualTreeHelper.GetParent(element);
+
+                if (element is ListBoxItem listBoxItem && listBoxItem.DataContext is CompletionItemData item)
+                    UpdateDetailPopup(item);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"OnListBoxMouseMove failed: {ex.Message}");
+            }
+        }
+
+        private void OnListBoxMouseLeave(object sender, MouseEventArgs e)
+        {
+            try
+            {
+                UpdateDetailPopupForSelection();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"OnListBoxMouseLeave failed: {ex.Message}");
+            }
+        }
+
         // ═══════════════════════════════════════════════════════════════
         //  HELPERS
         // ═══════════════════════════════════════════════════════════════
@@ -648,6 +796,63 @@ namespace OpenHintSQL.UI
             catch (Exception ex)
             {
                 Logger.Error("PositionAtCaret failed", ex);
+            }
+        }
+
+        private void PositionDetailPopup()
+        {
+            try
+            {
+                if (_currentView?.VisualElement == null || !_popup.IsOpen)
+                    return;
+
+                var layout = CalculateDetailPopupLayout();
+
+                _detailPopup.PlacementTarget = null;
+                _detailPopup.HorizontalOffset = layout.HorizontalOffset;
+                _detailPopup.VerticalOffset = layout.VerticalOffset;
+                _detailBorder.Width = layout.Width;
+                _detailBorder.MaxHeight = layout.MaxHeight;
+                _detailScrollViewer.MaxHeight = Math.Max(DetailPopupMinHeight - 8, layout.MaxHeight - 8);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"PositionDetailPopup failed: {ex.Message}");
+            }
+        }
+
+        private void UpdateDetailPopupForSelection()
+        {
+            UpdateDetailPopup(SelectedItem);
+        }
+
+        private void UpdateDetailPopup(CompletionItemData item)
+        {
+            try
+            {
+                if (item == null || string.IsNullOrWhiteSpace(item.Description) || !_popup.IsOpen)
+                {
+                    _detailPopup.IsOpen = false;
+                    return;
+                }
+
+                var title = BuildDetailTitle(item);
+                var meta = BuildDetailMeta(item);
+                var body = BuildDetailBody(item);
+
+                _detailTitleText.Text = title;
+                _detailMetaText.Text = meta;
+                _detailDescriptionText.Text = body;
+
+                UpdateDetailPopupSize(title, meta, body);
+                PositionDetailPopup();
+
+                if (!_detailPopup.IsOpen)
+                    _detailPopup.IsOpen = true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"UpdateDetailPopup failed: {ex.Message}");
             }
         }
 
@@ -699,6 +904,304 @@ namespace OpenHintSQL.UI
             }
 
             return null;
+        }
+
+        private static string BuildDetailTitle(CompletionItemData item)
+        {
+            if (item == null)
+                return string.Empty;
+
+            return item.Text ?? string.Empty;
+        }
+
+        private static string BuildDetailMeta(CompletionItemData item)
+        {
+            if (item == null)
+                return string.Empty;
+
+            string kindLabel = GetKindLabel(item.Kind);
+            if (item.IsFavorite)
+                kindLabel += "  |  Favorite";
+
+            return kindLabel;
+        }
+
+        private static string BuildDetailBody(CompletionItemData item)
+        {
+            if (item == null)
+                return string.Empty;
+
+            var description = item.Description ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(description))
+                return string.Empty;
+
+            int separatorIndex = description.IndexOf(':');
+            if (separatorIndex > 0 && separatorIndex < description.Length - 1)
+            {
+                string body = description.Substring(separatorIndex + 1).Trim();
+                if (item.Kind == CompletionItemKind.Function || item.Kind == CompletionItemKind.Procedure)
+                    return FormatSignatureBody(body);
+
+                return body;
+            }
+
+            return item.Kind == CompletionItemKind.Function || item.Kind == CompletionItemKind.Procedure
+                ? FormatSignatureBody(description)
+                : description;
+        }
+
+        private static string FormatSignatureBody(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            value = value.Trim();
+            int openParen = value.IndexOf('(');
+            int closeParen = value.LastIndexOf(')');
+            if (openParen <= 0 || closeParen <= openParen)
+                return value;
+
+            string name = value.Substring(0, openParen).Trim();
+            string parameters = value.Substring(openParen + 1, closeParen - openParen - 1).Trim();
+
+            if (string.IsNullOrWhiteSpace(parameters))
+                return name + "()";
+
+            var parts = parameters
+                .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(part => part.Trim())
+                .Where(part => part.Length > 0)
+                .ToList();
+
+            if (parts.Count == 0)
+                return name + "()";
+
+            return name + "(" + Environment.NewLine +
+                   "    " + string.Join("," + Environment.NewLine + "    ", parts) + Environment.NewLine +
+                   ")";
+        }
+
+        private static string GetKindLabel(CompletionItemKind kind)
+        {
+            switch (kind)
+            {
+                case CompletionItemKind.Table:
+                    return "Table";
+                case CompletionItemKind.View:
+                    return "View";
+                case CompletionItemKind.Alias:
+                    return "Alias";
+                case CompletionItemKind.Column:
+                    return "Column";
+                case CompletionItemKind.Function:
+                    return "Function";
+                case CompletionItemKind.Procedure:
+                    return "Procedure";
+                case CompletionItemKind.Database:
+                    return "Database";
+                case CompletionItemKind.Schema:
+                    return "Schema";
+                case CompletionItemKind.Snippet:
+                    return "Snippet";
+                case CompletionItemKind.Keyword:
+                    return "Keyword";
+                case CompletionItemKind.JoinSuggestion:
+                    return "Join suggestion";
+                case CompletionItemKind.DataType:
+                    return "Data type";
+                case CompletionItemKind.Status:
+                    return "Status";
+                default:
+                    return kind.ToString();
+            }
+        }
+
+        private void UpdateDetailPopupSize(string title, string meta, string body)
+        {
+            try
+            {
+                double availableWidth = GetMaxAvailableDetailWidth();
+                if (availableWidth <= 0)
+                    availableWidth = DetailPopupPreferredWidth;
+
+                double maxWidth = Math.Min(DetailPopupMaxWidth, availableWidth);
+                double measuredWidth = Math.Max(
+                    MeasureTextWidth(title, _detailTitleText),
+                    Math.Max(
+                        MeasureTextWidth(meta, _detailMetaText),
+                        MeasureTextWidth(body, _detailDescriptionText)));
+
+                double desiredWidth = measuredWidth + 42;
+                _detailBorder.Width = Math.Max(
+                    DetailPopupMinWidth,
+                    Math.Min(maxWidth, Math.Max(DetailPopupPreferredWidth, desiredWidth)));
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"UpdateDetailPopupSize failed: {ex.Message}");
+                _detailBorder.Width = DetailPopupPreferredWidth;
+            }
+        }
+
+        private DetailPopupLayout CalculateDetailPopupLayout()
+        {
+            double preferredWidth = _detailBorder.Width > 0
+                ? _detailBorder.Width
+                : DetailPopupPreferredWidth;
+
+            if (_currentView?.VisualElement == null || _border == null)
+            {
+                return new DetailPopupLayout
+                {
+                    Width = preferredWidth,
+                    MaxHeight = DetailPopupPreferredMaxHeight,
+                    HorizontalOffset = _popup.HorizontalOffset + PopupWidth + DetailPopupGap,
+                    VerticalOffset = _popup.VerticalOffset
+                };
+            }
+
+            _border.UpdateLayout();
+
+            double maxWidth = Math.Max(DetailPopupMinWidth, Math.Min(preferredWidth, DetailPopupMaxWidth));
+            _detailBorder.Width = maxWidth;
+            _detailBorder.Measure(new Size(maxWidth, DetailPopupMaxHeight));
+
+            Point mainTopLeft = ToDipScreenPoint(_border, new Point(0, 0));
+            var mainBounds = new Rect(mainTopLeft.X, mainTopLeft.Y, _border.ActualWidth > 0 ? _border.ActualWidth : PopupWidth, _border.ActualHeight > 0 ? _border.ActualHeight : PopupMaxHeight);
+            Rect workArea = SystemParameters.WorkArea;
+
+            double rightSpace = workArea.Right - (mainBounds.Right + DetailPopupGap + DetailPopupViewportMargin);
+            double leftSpace = mainBounds.Left - workArea.Left - DetailPopupGap - DetailPopupViewportMargin;
+            bool placeRight = rightSpace >= preferredWidth || rightSpace >= leftSpace;
+
+            double width = Math.Max(
+                DetailPopupMinWidth,
+                Math.Min(DetailPopupMaxWidth, Math.Max(Math.Min(preferredWidth, placeRight ? rightSpace : leftSpace), DetailPopupMinWidth)));
+
+            _detailBorder.Width = width;
+            _detailBorder.Measure(new Size(width, DetailPopupMaxHeight));
+            double desiredHeight = Math.Min(_detailBorder.DesiredSize.Height, DetailPopupMaxHeight);
+            double top = Math.Max(workArea.Top + DetailPopupViewportMargin, mainBounds.Top);
+            double availableHeight = workArea.Bottom - top - DetailPopupViewportMargin;
+            double maxHeight = Math.Max(
+                DetailPopupMinHeight,
+                Math.Min(DetailPopupMaxHeight, Math.Min(desiredHeight, availableHeight)));
+
+            double verticalOffset = top;
+            if (verticalOffset + maxHeight > workArea.Bottom - DetailPopupViewportMargin)
+            {
+                verticalOffset = Math.Max(
+                    workArea.Top + DetailPopupViewportMargin,
+                    workArea.Bottom - DetailPopupViewportMargin - maxHeight);
+            }
+
+            if (placeRight)
+            {
+                return new DetailPopupLayout
+                {
+                    Width = width,
+                    MaxHeight = maxHeight,
+                    HorizontalOffset = mainBounds.Right + DetailPopupGap,
+                    VerticalOffset = verticalOffset
+                };
+            }
+
+            return new DetailPopupLayout
+            {
+                Width = width,
+                MaxHeight = maxHeight,
+                HorizontalOffset = Math.Max(
+                    workArea.Left + DetailPopupViewportMargin,
+                    mainBounds.Left - width - DetailPopupGap),
+                VerticalOffset = verticalOffset
+            };
+        }
+
+        private double GetMaxAvailableDetailWidth()
+        {
+            try
+            {
+                if (_currentView?.VisualElement == null)
+                    return DetailPopupPreferredWidth;
+
+                var viewWidth = _currentView.VisualElement.ActualWidth;
+                var rightSpace = viewWidth - (_popup.HorizontalOffset + PopupWidth + DetailPopupGap + DetailPopupViewportMargin);
+                var leftSpace = _popup.HorizontalOffset - DetailPopupGap - DetailPopupViewportMargin;
+                var usableSpace = Math.Max(rightSpace, leftSpace);
+                return Math.Max(usableSpace, DetailPopupMinWidth);
+            }
+            catch
+            {
+                return DetailPopupPreferredWidth;
+            }
+        }
+
+        private sealed class DetailPopupLayout
+        {
+            public double Width { get; set; }
+            public double MaxHeight { get; set; }
+            public double HorizontalOffset { get; set; }
+            public double VerticalOffset { get; set; }
+        }
+
+        private static double MeasureTextWidth(string text, TextBlock template)
+        {
+            if (string.IsNullOrWhiteSpace(text) || template == null)
+                return 0;
+
+            double pixelsPerDip = 1.0;
+            if (Application.Current?.MainWindow != null)
+                pixelsPerDip = VisualTreeHelper.GetDpi(Application.Current.MainWindow).PixelsPerDip;
+
+            var formatted = new FormattedText(
+                text,
+                CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight,
+                new Typeface(
+                    template.FontFamily,
+                    template.FontStyle,
+                    template.FontWeight,
+                    template.FontStretch),
+                template.FontSize,
+                Brushes.Black,
+                pixelsPerDip);
+
+            var longestLine = text
+                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                .DefaultIfEmpty(string.Empty)
+                .OrderByDescending(line => line.Length)
+                .FirstOrDefault();
+
+            if (!string.IsNullOrEmpty(longestLine))
+            {
+                formatted = new FormattedText(
+                    longestLine,
+                    CultureInfo.CurrentUICulture,
+                    FlowDirection.LeftToRight,
+                    new Typeface(
+                        template.FontFamily,
+                        template.FontStyle,
+                        template.FontWeight,
+                        template.FontStretch),
+                    template.FontSize,
+                    Brushes.Black,
+                    pixelsPerDip);
+            }
+
+            return formatted.WidthIncludingTrailingWhitespace;
+        }
+
+        private Point ToDipScreenPoint(Visual visual, Point point)
+        {
+            if (visual == null)
+                return point;
+
+            Point screenPoint = visual.PointToScreen(point);
+            var source = PresentationSource.FromVisual(visual);
+            if (source?.CompositionTarget == null)
+                return screenPoint;
+
+            return source.CompositionTarget.TransformFromDevice.Transform(screenPoint);
         }
 
         /// <summary>

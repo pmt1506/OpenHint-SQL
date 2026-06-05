@@ -178,7 +178,9 @@ namespace OpenHintSQL.Schema
                 {
                     Text = p.FullName,
                     InsertText = p.Name,
-                    Description = $"{label}: {p.FullName}",
+                    Description = p.Parameters.Count > 0
+                        ? $"{label}: {p.Signature}"
+                        : $"{label}: {p.FullName}",
                     Kind = kind,
                     Priority = 20,
                     IconKey = label

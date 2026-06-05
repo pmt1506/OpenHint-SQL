@@ -12,6 +12,7 @@ using OpenHintSQL.Connection;
 using OpenHintSQL.Context;
 using OpenHintSQL.Providers;
 using OpenHintSQL.Schema;
+using OpenHintSQL.Settings;
 using OpenHintSQL.Snippets;
 using OpenHintSQL.UI;
 using OpenHintSQL.Utils;
@@ -431,6 +432,17 @@ namespace OpenHintSQL.Completion
                     else
                         DismissPopup();
                 }
+                else if (typedChar == '=')
+                {
+                    string fullText = _textView.GetAllText();
+                    int caretOffset = _textView.GetCaretPosition();
+                    var context = SqlContextParser.GetContext(fullText, caretOffset);
+
+                    if (ShouldTriggerExpressionCompletionAfterOperator(context))
+                        TriggerCompletion(allowEmptyPrefix: true);
+                    else
+                        DismissPopup();
+                }
                 else if (char.IsWhiteSpace(typedChar))
                 {
                     // Whitespace right after a clause keyword (FROM, JOIN, EXEC, …)
@@ -486,6 +498,21 @@ namespace OpenHintSQL.Completion
         // ═══════════════════════════════════════════════════════════════
         //  COMPLETION TRIGGER
         // ═══════════════════════════════════════════════════════════════
+
+        private static bool ShouldTriggerExpressionCompletionAfterOperator(SqlContext context)
+        {
+            switch (context)
+            {
+                case SqlContext.SelectClause:
+                case SqlContext.WhereClause:
+                case SqlContext.OnClause:
+                case SqlContext.SetClause:
+                case SqlContext.HavingClause:
+                    return true;
+                default:
+                    return false;
+            }
+        }
 
         /// <summary>
         /// Triggers or updates the completion popup based on the current word before the caret.
@@ -709,6 +736,8 @@ namespace OpenHintSQL.Completion
                 if (wordLength >= 0)
                 {
                     _textView.ReplaceSpan(replaceStart, wordLength, insertText);
+                    if (item.Kind == CompletionItemKind.Table)
+                        TableUsageProvider.RecordTableUsage(item.Text);
                 }
 
                 Logger.Diagnostic($"Inserted completion: '{insertText}'");

@@ -260,11 +260,12 @@ namespace OpenHintSQL.Completion
                     case SqlContext.GroupByClause:
                     case SqlContext.HavingClause:
                     case SqlContext.SetClause:
+                        AddScopedAliasSuggestions(results, schema, prefix, fullText, caretOffset, prioritizeCurrentJoinTarget: false);
                         AddColumns(results, schema, prefix, fullText, caretOffset, context);
                         break;
 
                     case SqlContext.OnClause:
-                        AddOnClauseAliasSuggestions(results, schema, prefix, fullText, caretOffset);
+                        AddScopedAliasSuggestions(results, schema, prefix, fullText, caretOffset, prioritizeCurrentJoinTarget: true);
                         AddColumns(results, schema, prefix, fullText, caretOffset, context);
                         break;
 
@@ -576,6 +577,7 @@ namespace OpenHintSQL.Completion
         private static CompletionItemData BuildTableItem(TableInfo t, bool includeAlias, HashSet<string> usedAliases)
         {
             var insertText = BuildObjectInsertText(t, includeAlias, usedAliases);
+            int usageScore = TableUsageProvider.GetUsageScore(t?.FullName);
             return new CompletionItemData
             {
                 Text = t.FullName,
@@ -583,6 +585,8 @@ namespace OpenHintSQL.Completion
                 Description = $"Table: {insertText}",
                 Kind = CompletionItemKind.Table,
                 Priority = 10,
+                UsageScore = usageScore,
+                IsFavorite = TableUsageProvider.IsFavorite(t?.FullName),
                 IconKey = "Table"
             };
         }
@@ -1261,6 +1265,7 @@ namespace OpenHintSQL.Completion
                 if (context == SqlContext.SelectClause)
                 {
                     AddSelectClauseColumns(results, schema, prefix, fullText, caretOffset);
+                    AddSelectClauseFunctions(results, schema, prefix);
                     return;
                 }
 
@@ -1319,14 +1324,18 @@ namespace OpenHintSQL.Completion
             string fullText,
             int caretOffset)
         {
-            var referencedTables = GetReferencedTablesInOrder(fullText, schema);
+            var statementScope = GetCurrentStatementScope(fullText, caretOffset);
+            var statementText = statementScope.text;
+            int statementCaretOffset = statementScope.caretOffset;
+
+            var referencedTables = GetReferencedTablesInOrder(statementText, schema);
             if (referencedTables.Count == 0)
             {
                 AddAllColumnsFallback(results, schema, prefix);
                 return;
             }
 
-            var selectedColumns = GetPreviouslySelectedColumns(fullText, caretOffset);
+            var selectedColumns = GetPreviouslySelectedColumns(statementText, statementCaretOffset);
             var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var tableName in referencedTables)
@@ -1386,6 +1395,38 @@ namespace OpenHintSQL.Completion
             }
         }
 
+        private static void AddSelectClauseFunctions(
+            List<CompletionItemData> results,
+            DatabaseSchema schema,
+            string prefix)
+        {
+            if (schema?.Procedures == null)
+                return;
+
+            foreach (var proc in schema.Procedures.Values)
+            {
+                if (proc == null || !proc.IsFunction)
+                    continue;
+                if (!MatchesPrefix(proc.FullName, prefix) && !MatchesPrefix(proc.Name, prefix))
+                    continue;
+
+                string insertText = proc.Name + "()";
+                string description = proc.Parameters.Count > 0
+                    ? $"{proc.ObjectType}: {proc.Signature}"
+                    : $"{proc.ObjectType}: {proc.FullName}()";
+
+                results.Add(new CompletionItemData
+                {
+                    Text = proc.FullName,
+                    InsertText = insertText,
+                    Description = description,
+                    Kind = CompletionItemKind.Function,
+                    Priority = 4,
+                    IconKey = "Function"
+                });
+            }
+        }
+
         private static TableInfo ResolveTableByAnyName(DatabaseSchema schema, string tableName)
         {
             if (schema == null || string.IsNullOrWhiteSpace(tableName))
@@ -1435,6 +1476,54 @@ namespace OpenHintSQL.Completion
             return selected;
         }
 
+        private static (string text, int caretOffset) GetCurrentStatementScope(string fullText, int caretOffset)
+        {
+            if (string.IsNullOrEmpty(fullText))
+                return (string.Empty, 0);
+
+            int safeCaret = Math.Min(Math.Max(caretOffset, 0), fullText.Length);
+            int start = FindStatementStart(fullText, safeCaret);
+            int end = FindStatementEnd(fullText, safeCaret);
+
+            if (end < start)
+                end = fullText.Length;
+
+            string text = fullText.Substring(start, end - start);
+            return (text, safeCaret - start);
+        }
+
+        private static int FindStatementStart(string text, int caretOffset)
+        {
+            int start = 0;
+
+            for (int i = 0; i < caretOffset; i++)
+            {
+                if (text[i] == ';')
+                    start = i + 1;
+            }
+
+            var beforeCaret = text.Substring(0, caretOffset);
+            foreach (Match match in Regex.Matches(beforeCaret, @"(?im)^[ \t]*GO(?:[ \t]+--.*)?[ \t]*\r?$"))
+            {
+                start = Math.Max(start, match.Index + match.Length);
+            }
+
+            return start;
+        }
+
+        private static int FindStatementEnd(string text, int caretOffset)
+        {
+            for (int i = caretOffset; i < text.Length; i++)
+            {
+                if (text[i] == ';')
+                    return i;
+            }
+
+            var afterCaret = text.Substring(caretOffset);
+            var goMatch = Regex.Match(afterCaret, @"(?im)^[ \t]*GO(?:[ \t]+--.*)?[ \t]*\r?$", RegexOptions.Multiline);
+            return goMatch.Success ? caretOffset + goMatch.Index : text.Length;
+        }
+
         private static int IndexOfTopLevelFrom(string text)
         {
             if (string.IsNullOrEmpty(text))
@@ -1477,12 +1566,13 @@ namespace OpenHintSQL.Completion
             return char.IsLetterOrDigit(c) || c == '_' || c == '@' || c == '#';
         }
 
-        private static void AddOnClauseAliasSuggestions(
+        private static void AddScopedAliasSuggestions(
             List<CompletionItemData> results,
             DatabaseSchema schema,
             string prefix,
             string fullText,
-            int caretOffset)
+            int caretOffset,
+            bool prioritizeCurrentJoinTarget)
         {
             try
             {
@@ -1505,7 +1595,7 @@ namespace OpenHintSQL.Completion
                     if (!MatchesOnClauseAliasPrefix(scopedRef, prefix))
                         continue;
 
-                    bool isCurrentJoinTarget = i == lastIndex;
+                    bool isCurrentJoinTarget = prioritizeCurrentJoinTarget && i == lastIndex;
                     string insertText = alias + ".";
                     string tableName = GetObjectInsertName(scopedRef.Table);
 
@@ -1516,15 +1606,15 @@ namespace OpenHintSQL.Completion
                         Description = isCurrentJoinTarget
                             ? $"Alias cua bang vua JOIN: {tableName}"
                             : $"Alias trong scope: {tableName}",
-                        Kind = CompletionItemKind.Column,
+                        Kind = CompletionItemKind.Alias,
                         Priority = isCurrentJoinTarget ? 5 : 8,
-                        IconKey = "Column"
+                        IconKey = "Alias"
                     });
                 }
             }
             catch (Exception ex)
             {
-                Logger.Error("AddOnClauseAliasSuggestions failed", ex);
+                Logger.Error("AddScopedAliasSuggestions failed", ex);
             }
         }
 
@@ -1864,6 +1954,8 @@ namespace OpenHintSQL.Completion
             // Sort: exact prefix match first → priority desc → alphabetical
             var sorted = deduplicated
                 .OrderByDescending(item => GetPrefixRelevance(item, prefix))
+                .ThenByDescending(item => item.IsFavorite)
+                .ThenByDescending(item => item.UsageScore)
                 .ThenByDescending(item => item.Priority)
                 .ThenBy(item => item.SortOrder ?? int.MaxValue)
                 .ThenBy(item => item.Text, StringComparer.OrdinalIgnoreCase)
