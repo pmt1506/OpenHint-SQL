@@ -222,7 +222,7 @@ namespace OpenHintSQL.Completion
                 // typing `c.` always means "columns of whatever c resolves to".
                 if (SqlContextParser.GetTableContext(fullText, caretOffset) != null)
                 {
-                    AddColumns(results, schema, prefix, fullText, caretOffset);
+                    AddColumns(results, schema, prefix, fullText, caretOffset, context);
                     return;
                 }
 
@@ -256,12 +256,16 @@ namespace OpenHintSQL.Completion
                     // ── Column-position contexts ────────────────────────────────
                     case SqlContext.SelectClause:
                     case SqlContext.WhereClause:
-                    case SqlContext.OnClause:
                     case SqlContext.OrderByClause:
                     case SqlContext.GroupByClause:
                     case SqlContext.HavingClause:
                     case SqlContext.SetClause:
-                        AddColumns(results, schema, prefix, fullText, caretOffset);
+                        AddColumns(results, schema, prefix, fullText, caretOffset, context);
+                        break;
+
+                    case SqlContext.OnClause:
+                        AddOnClauseAliasSuggestions(results, schema, prefix, fullText, caretOffset);
+                        AddColumns(results, schema, prefix, fullText, caretOffset, context);
                         break;
 
                     // ── Other ───────────────────────────────────────────────────
@@ -415,6 +419,37 @@ namespace OpenHintSQL.Completion
         private static bool IsDatabaseNameFragmentChar(char c)
         {
             return char.IsLetterOrDigit(c) || c == '_' || c == '@' || c == '#' || c == '[' || c == ']';
+        }
+
+        private static bool MatchesColumnPrefix(string name, string prefix)
+        {
+            if (MatchesPrefix(name, prefix))
+                return true;
+
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(prefix))
+                return false;
+
+            string normalizedName = NormalizeLooseIdentifier(name);
+            string normalizedPrefix = NormalizeLooseIdentifier(prefix);
+            if (string.IsNullOrEmpty(normalizedName) || string.IsNullOrEmpty(normalizedPrefix))
+                return false;
+
+            return normalizedName.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeLooseIdentifier(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+
+            var sb = new StringBuilder(value.Length);
+            foreach (char c in value)
+            {
+                if (char.IsLetterOrDigit(c))
+                    sb.Append(char.ToLowerInvariant(c));
+            }
+
+            return sb.ToString();
         }
 
         private static bool ContextNeedsSchema(SqlContext context)
@@ -702,6 +737,8 @@ namespace OpenHintSQL.Completion
                             fkParentIsScoped: false, usedAliases, emittedTargets, prefix);
                     }
                 }
+
+                AddHeuristicJoinSuggestions(results, schema, scoped, usedAliases, emittedTargets, prefix);
             }
             catch (Exception ex)
             {
@@ -771,6 +808,236 @@ namespace OpenHintSQL.Completion
                 Priority = 100,
                 IconKey = "JoinSuggestion"
             });
+        }
+
+        private static void AddHeuristicJoinSuggestions(
+            List<CompletionItemData> results,
+            DatabaseSchema schema,
+            List<ScopedTable> scoped,
+            HashSet<string> usedAliases,
+            HashSet<string> emittedTargets,
+            string prefix)
+        {
+            try
+            {
+                if (schema == null || scoped == null || scoped.Count == 0)
+                    return;
+
+                var allTargets = schema.Tables.Values.Concat(schema.Views.Values);
+                foreach (var scopedRef in scoped)
+                {
+                    foreach (var targetTable in allTargets)
+                    {
+                        if (targetTable == null || ReferenceEquals(targetTable, scopedRef.Table))
+                            continue;
+                        if (!MatchesTablePrefix(targetTable, prefix))
+                            continue;
+                        if (emittedTargets.Contains(targetTable.FullName))
+                            continue;
+
+                        if (!TryBuildHeuristicJoin(scopedRef, targetTable, out var onClauseTemplate, out var matchDetail))
+                            continue;
+
+                        var newAlias = GenerateAlias(targetTable.Name, usedAliases);
+                        usedAliases.Add(newAlias);
+                        emittedTargets.Add(targetTable.FullName);
+
+                        string onClause = onClauseTemplate.Replace("{alias}", newAlias);
+                        string display = $"{GetObjectInsertName(targetTable)} {newAlias} ON {onClause}";
+                        results.Add(new CompletionItemData
+                        {
+                            Text = display,
+                            InsertText = display,
+                            Description = $"Heuristic join on {matchDetail}",
+                            Kind = CompletionItemKind.JoinSuggestion,
+                            Priority = 60,
+                            IconKey = "JoinSuggestion"
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("AddHeuristicJoinSuggestions failed", ex);
+            }
+        }
+
+        private static bool TryBuildHeuristicJoin(
+            ScopedTable scopedRef,
+            TableInfo targetTable,
+            out string onClause,
+            out string matchDetail)
+        {
+            onClause = null;
+            matchDetail = null;
+
+            if (scopedRef.Table?.Columns == null || targetTable?.Columns == null)
+                return false;
+
+            var targetKeyColumns = GetLikelyJoinKeyColumns(targetTable).ToList();
+            var scopedKeyColumns = GetLikelyJoinKeyColumns(scopedRef.Table).ToList();
+            if (targetKeyColumns.Count == 0 || scopedKeyColumns.Count == 0)
+                return false;
+
+            foreach (var scopedColumn in scopedRef.Table.Columns)
+            {
+                if (!TryGetIdBaseName(scopedColumn.Name, out var scopedBase))
+                    continue;
+
+                if (MatchesTableNameVariant(targetTable.Name, scopedBase))
+                {
+                    var targetKey = FindBestTargetKey(targetKeyColumns, scopedColumn, scopedBase);
+                    if (targetKey != null)
+                    {
+                        onClause = $"{scopedRef.EffectiveAlias}.{scopedColumn.Name} = {{alias}}.{targetKey.Name}";
+                        matchDetail = scopedColumn.Name;
+                        return true;
+                    }
+                }
+            }
+
+            foreach (var targetColumn in targetTable.Columns)
+            {
+                if (!TryGetIdBaseName(targetColumn.Name, out var targetBase))
+                    continue;
+
+                if (MatchesTableNameVariant(scopedRef.Table.Name, targetBase))
+                {
+                    var scopedKey = FindBestTargetKey(scopedKeyColumns, targetColumn, targetBase);
+                    if (scopedKey != null)
+                    {
+                        onClause = $"{{alias}}.{targetColumn.Name} = {scopedRef.EffectiveAlias}.{scopedKey.Name}";
+                        matchDetail = targetColumn.Name;
+                        return true;
+                    }
+                }
+            }
+
+            foreach (var scopedColumn in scopedRef.Table.Columns)
+            {
+                if (!LooksLikeJoinId(scopedColumn.Name))
+                    continue;
+
+                var targetColumn = targetTable.Columns.FirstOrDefault(column =>
+                    string.Equals(NormalizeIdentifier(column.Name), NormalizeIdentifier(scopedColumn.Name), StringComparison.OrdinalIgnoreCase));
+                if (targetColumn == null)
+                    continue;
+
+                onClause = $"{scopedRef.EffectiveAlias}.{scopedColumn.Name} = {{alias}}.{targetColumn.Name}";
+                matchDetail = scopedColumn.Name;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static IEnumerable<ColumnInfo> GetLikelyJoinKeyColumns(TableInfo table)
+        {
+            return table.Columns.Where(column =>
+                column.IsPrimaryKey ||
+                column.IsIdentity ||
+                string.Equals(NormalizeIdentifier(column.Name), "id", StringComparison.OrdinalIgnoreCase) ||
+                LooksLikeJoinId(column.Name));
+        }
+
+        private static ColumnInfo FindBestTargetKey(IEnumerable<ColumnInfo> candidateKeys, ColumnInfo sourceColumn, string sourceBase)
+        {
+            var normalizedSource = NormalizeIdentifier(sourceColumn.Name);
+            foreach (var candidate in candidateKeys)
+            {
+                if (string.Equals(NormalizeIdentifier(candidate.Name), normalizedSource, StringComparison.OrdinalIgnoreCase))
+                    return candidate;
+            }
+
+            foreach (var candidate in candidateKeys)
+            {
+                if (string.Equals(NormalizeIdentifier(candidate.Name), "id", StringComparison.OrdinalIgnoreCase))
+                    return candidate;
+            }
+
+            foreach (var candidate in candidateKeys)
+            {
+                if (TryGetIdBaseName(candidate.Name, out var candidateBase) &&
+                    string.Equals(candidateBase, sourceBase, StringComparison.OrdinalIgnoreCase))
+                    return candidate;
+            }
+
+            return candidateKeys.FirstOrDefault();
+        }
+
+        private static bool MatchesTableNameVariant(string tableName, string baseName)
+        {
+            if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(baseName))
+                return false;
+
+            return GetTableNameVariants(tableName).Any(variant =>
+                string.Equals(variant, baseName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static IEnumerable<string> GetTableNameVariants(string tableName)
+        {
+            if (string.IsNullOrWhiteSpace(tableName))
+                yield break;
+
+            var normalizedFull = NormalizeIdentifier(tableName);
+            if (!string.IsNullOrEmpty(normalizedFull))
+                yield return normalizedFull;
+
+            var underscoreTokens = tableName
+                .Split(new[] { '_' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(NormalizeIdentifier)
+                .Where(token => !string.IsNullOrEmpty(token))
+                .ToArray();
+
+            if (underscoreTokens.Length > 1)
+            {
+                for (int i = 1; i < underscoreTokens.Length; i++)
+                {
+                    yield return string.Concat(underscoreTokens.Skip(i));
+                }
+            }
+        }
+
+        private static bool TryGetIdBaseName(string columnName, out string baseName)
+        {
+            baseName = null;
+            if (!LooksLikeJoinId(columnName))
+                return false;
+
+            var normalized = NormalizeIdentifier(columnName);
+            if (normalized.EndsWith("id", StringComparison.OrdinalIgnoreCase))
+                normalized = normalized.Substring(0, normalized.Length - 2);
+
+            if (string.IsNullOrWhiteSpace(normalized))
+                return false;
+
+            baseName = normalized;
+            return true;
+        }
+
+        private static bool LooksLikeJoinId(string columnName)
+        {
+            if (string.IsNullOrWhiteSpace(columnName))
+                return false;
+
+            var normalized = NormalizeIdentifier(columnName);
+            return normalized.Length > 2 &&
+                normalized.EndsWith("id", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeIdentifier(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            var sb = new StringBuilder(value.Length);
+            foreach (char c in value)
+            {
+                if (char.IsLetterOrDigit(c))
+                    sb.Append(char.ToLowerInvariant(c));
+            }
+
+            return sb.ToString();
         }
 
         /// <summary>
@@ -914,13 +1181,21 @@ namespace OpenHintSQL.Completion
         /// </summary>
         private static HashSet<string> GetReferencedTables(string fullText, DatabaseSchema schema)
         {
-            var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return new HashSet<string>(
+                GetReferencedTablesInOrder(fullText, schema),
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static List<string> GetReferencedTablesInOrder(string fullText, DatabaseSchema schema)
+        {
+            var referenced = new List<string>();
             if (string.IsNullOrEmpty(fullText) || schema == null)
                 return referenced;
 
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var scoped in ResolveScopedTables(fullText, schema))
             {
-                if (scoped.Table != null)
+                if (scoped.Table != null && seen.Add(scoped.Table.FullName))
                     referenced.Add(scoped.Table.FullName);
             }
 
@@ -933,14 +1208,14 @@ namespace OpenHintSQL.Completion
                 if (string.IsNullOrEmpty(word))
                     continue;
 
-                if (schema.Tables.ContainsKey(word))
+                if (schema.Tables.ContainsKey(word) && seen.Add(word))
                     referenced.Add(word);
-                else if (schema.Views.ContainsKey(word))
+                else if (schema.Views.ContainsKey(word) && seen.Add(word))
                     referenced.Add(word);
                 else
                 {
                     var table = ResolveTable(schema, null, word);
-                    if (table != null)
+                    if (table != null && seen.Add(table.FullName))
                         referenced.Add(table.FullName);
                 }
             }
@@ -956,7 +1231,8 @@ namespace OpenHintSQL.Completion
             DatabaseSchema schema,
             string prefix,
             string fullText,
-            int caretOffset)
+            int caretOffset,
+            SqlContext context)
         {
             try
             {
@@ -973,12 +1249,18 @@ namespace OpenHintSQL.Completion
                     {
                         foreach (var col in cols)
                         {
-                            if (MatchesPrefix(col.Text, prefix))
+                            if (MatchesColumnPrefix(col.Text, prefix))
                             {
                                 results.Add(col);
                             }
                         }
-                    }
+                }
+                    return;
+                }
+
+                if (context == SqlContext.SelectClause)
+                {
+                    AddSelectClauseColumns(results, schema, prefix, fullText, caretOffset);
                     return;
                 }
 
@@ -993,7 +1275,7 @@ namespace OpenHintSQL.Completion
                         {
                             foreach (var col in cols)
                             {
-                                if (MatchesPrefix(col.Text, prefix))
+                                if (MatchesColumnPrefix(col.Text, prefix))
                                 {
                                     results.Add(col);
                                 }
@@ -1008,7 +1290,7 @@ namespace OpenHintSQL.Completion
                     {
                         foreach (var col in table.Columns)
                         {
-                            if (MatchesPrefix(col.Name, prefix))
+                            if (MatchesColumnPrefix(col.Name, prefix))
                             {
                                 results.Add(new CompletionItemData
                                 {
@@ -1028,6 +1310,234 @@ namespace OpenHintSQL.Completion
             {
                 Logger.Error("AddColumns failed", ex);
             }
+        }
+
+        private static void AddSelectClauseColumns(
+            List<CompletionItemData> results,
+            DatabaseSchema schema,
+            string prefix,
+            string fullText,
+            int caretOffset)
+        {
+            var referencedTables = GetReferencedTablesInOrder(fullText, schema);
+            if (referencedTables.Count == 0)
+            {
+                AddAllColumnsFallback(results, schema, prefix);
+                return;
+            }
+
+            var selectedColumns = GetPreviouslySelectedColumns(fullText, caretOffset);
+            var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var tableName in referencedTables)
+            {
+                var table = ResolveTableByAnyName(schema, tableName);
+                if (table?.Columns == null)
+                    continue;
+
+                foreach (var col in table.Columns.OrderBy(c => c.OrdinalPosition))
+                {
+                    if (!MatchesColumnPrefix(col.Name, prefix))
+                        continue;
+                    if (selectedColumns.Contains(col.Name))
+                        continue;
+                    if (!emitted.Add(col.Name))
+                        continue;
+
+                    results.Add(new CompletionItemData
+                    {
+                        Text = col.Name,
+                        InsertText = col.Name,
+                        Description = col.DisplayText,
+                        Kind = CompletionItemKind.Column,
+                        Priority = 5,
+                        IconKey = "Column"
+                    });
+                }
+            }
+
+            if (results.Count == 0)
+                AddAllColumnsFallback(results, schema, prefix);
+        }
+
+        private static void AddAllColumnsFallback(
+            List<CompletionItemData> results,
+            DatabaseSchema schema,
+            string prefix)
+        {
+            foreach (var table in schema.Tables.Values)
+            {
+                foreach (var col in table.Columns.OrderBy(c => c.OrdinalPosition))
+                {
+                    if (MatchesColumnPrefix(col.Name, prefix))
+                    {
+                        results.Add(new CompletionItemData
+                        {
+                            Text = col.Name,
+                            InsertText = col.Name,
+                            Description = col.DisplayText,
+                            Kind = CompletionItemKind.Column,
+                            Priority = 70,
+                            IconKey = "Column"
+                        });
+                    }
+                }
+            }
+        }
+
+        private static TableInfo ResolveTableByAnyName(DatabaseSchema schema, string tableName)
+        {
+            if (schema == null || string.IsNullOrWhiteSpace(tableName))
+                return null;
+
+            if (schema.Tables.TryGetValue(tableName, out var table))
+                return table;
+            if (schema.Views.TryGetValue(tableName, out table))
+                return table;
+
+            return ResolveTable(schema, null, tableName);
+        }
+
+        private static HashSet<string> GetPreviouslySelectedColumns(string fullText, int caretOffset)
+        {
+            var selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(fullText) || caretOffset <= 0)
+                return selected;
+
+            string beforeCaret = fullText.Substring(0, Math.Min(caretOffset, fullText.Length));
+            var selectMatch = Regex.Match(
+                beforeCaret,
+                @"\bSELECT\b(?<body>[\s\S]*)$",
+                RegexOptions.IgnoreCase | RegexOptions.RightToLeft);
+            if (!selectMatch.Success)
+                return selected;
+
+            string selectBody = selectMatch.Groups["body"].Value;
+            int fromIndex = IndexOfTopLevelFrom(selectBody);
+            if (fromIndex >= 0)
+                selectBody = selectBody.Substring(0, fromIndex);
+
+            foreach (string rawSegment in selectBody.Split(','))
+            {
+                string segment = rawSegment.Trim();
+                if (string.IsNullOrEmpty(segment))
+                    continue;
+
+                segment = Regex.Replace(segment, @"\s+AS\s+\[?\w+\]?\s*$", string.Empty, RegexOptions.IgnoreCase);
+                segment = Regex.Replace(segment, @"\s+\[?\w+\]?\s*$", string.Empty, RegexOptions.IgnoreCase);
+
+                var qualified = Regex.Match(segment, @"(?:\[?\w+\]?\.)?\[?(?<col>\w+)\]?$", RegexOptions.IgnoreCase);
+                if (qualified.Success)
+                    selected.Add(qualified.Groups["col"].Value);
+            }
+
+            return selected;
+        }
+
+        private static int IndexOfTopLevelFrom(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return -1;
+
+            int depth = 0;
+            for (int i = 0; i < text.Length - 3; i++)
+            {
+                char c = text[i];
+                if (c == '(')
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (c == ')')
+                {
+                    if (depth > 0)
+                        depth--;
+                    continue;
+                }
+
+                if (depth > 0)
+                    continue;
+
+                if ((i == 0 || !IsIdentifierChar(text[i - 1])) &&
+                    i + 4 <= text.Length &&
+                    string.Equals(text.Substring(i, 4), "FROM", StringComparison.OrdinalIgnoreCase) &&
+                    (i + 4 == text.Length || !IsIdentifierChar(text[i + 4])))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private static bool IsIdentifierChar(char c)
+        {
+            return char.IsLetterOrDigit(c) || c == '_' || c == '@' || c == '#';
+        }
+
+        private static void AddOnClauseAliasSuggestions(
+            List<CompletionItemData> results,
+            DatabaseSchema schema,
+            string prefix,
+            string fullText,
+            int caretOffset)
+        {
+            try
+            {
+                var scoped = ResolveScopedTables(
+                    fullText?.Substring(0, Math.Min(Math.Max(caretOffset, 0), fullText?.Length ?? 0)) ?? string.Empty,
+                    schema);
+                if (scoped.Count == 0)
+                    return;
+
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                int lastIndex = scoped.Count - 1;
+
+                for (int i = lastIndex; i >= 0; i--)
+                {
+                    var scopedRef = scoped[i];
+                    string alias = scopedRef.EffectiveAlias;
+                    if (string.IsNullOrWhiteSpace(alias) || !seen.Add(alias))
+                        continue;
+
+                    if (!MatchesOnClauseAliasPrefix(scopedRef, prefix))
+                        continue;
+
+                    bool isCurrentJoinTarget = i == lastIndex;
+                    string insertText = alias + ".";
+                    string tableName = GetObjectInsertName(scopedRef.Table);
+
+                    results.Add(new CompletionItemData
+                    {
+                        Text = insertText,
+                        InsertText = insertText,
+                        Description = isCurrentJoinTarget
+                            ? $"Alias cua bang vua JOIN: {tableName}"
+                            : $"Alias trong scope: {tableName}",
+                        Kind = CompletionItemKind.Column,
+                        Priority = isCurrentJoinTarget ? 5 : 8,
+                        IconKey = "Column"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("AddOnClauseAliasSuggestions failed", ex);
+            }
+        }
+
+        private static bool MatchesOnClauseAliasPrefix(ScopedTable scopedRef, string prefix)
+        {
+            if (scopedRef.Table == null)
+                return false;
+
+            if (string.IsNullOrEmpty(prefix))
+                return true;
+
+            return MatchesPrefix(scopedRef.EffectiveAlias, prefix) ||
+                   MatchesPrefix(scopedRef.Table.Name, prefix) ||
+                   MatchesPrefix(scopedRef.Table.FullName, prefix);
         }
 
         /// <summary>

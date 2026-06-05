@@ -146,7 +146,7 @@ namespace OpenHintSQL.UI
             var panel = new DockPanel { Margin = new Thickness(0, 14, 0, 0), LastChildFill = false };
             var hint = new TextBlock
             {
-                Text = "Mo bang Ctrl+Alt+Q trong query editor.",
+                Text = "Mở bằng Ctrl+Alt+Q trong query editor.",
                 Foreground = new SolidColorBrush(Color.FromRgb(87, 96, 106)),
                 VerticalAlignment = VerticalAlignment.Center
             };

@@ -63,19 +63,19 @@
     {
       "shortcut": "jn",
       "title": "Inner Join",
-      "expansion": "INNER JOIN $table$ ON $cursor$",
+      "expansion": "INNER JOIN $cursor$",
       "description": "INNER JOIN ... ON"
     },
     {
       "shortcut": "lj",
       "title": "Left Join",
-      "expansion": "LEFT JOIN $table$ ON $cursor$",
+      "expansion": "LEFT JOIN $cursor$",
       "description": "LEFT JOIN ... ON"
     },
     {
       "shortcut": "rj",
       "title": "Right Join",
-      "expansion": "RIGHT JOIN $table$ ON $cursor$",
+      "expansion": "RIGHT JOIN $cursor$",
       "description": "RIGHT JOIN ... ON"
     },
     {
@@ -87,7 +87,7 @@
     {
       "shortcut": "fj",
       "title": "Full Outer Join",
-      "expansion": "FULL OUTER JOIN $table$ ON $cursor$",
+      "expansion": "FULL OUTER JOIN $cursor$",
       "description": "FULL OUTER JOIN ... ON"
     },
     {
