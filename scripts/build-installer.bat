@@ -27,7 +27,7 @@ REM    - Clears per-version MEF + extension caches after install
 REM    - On uninstall: removes only our files from every installed version
 REM ============================================================
 
-set "VERSION=1.0.5"
+set "VERSION=1.0.6"
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
 set "BUILD_DIR=%REPO_ROOT%\src\OpenHintSQL\bin\Release\net48"

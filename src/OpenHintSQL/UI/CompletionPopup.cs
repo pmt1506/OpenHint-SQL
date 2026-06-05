@@ -39,12 +39,13 @@ namespace OpenHintSQL.UI
 
         private static readonly Color BackgroundColor = (Color)ColorConverter.ConvertFromString("#FFFFFF");
         private static readonly Color ForegroundColor = (Color)ColorConverter.ConvertFromString("#1F2328");
-        private static readonly Color SelectionColor = (Color)ColorConverter.ConvertFromString("#DDEBFF");
+        private static readonly Color SelectionColor = (Color)ColorConverter.ConvertFromString("#BFD8FF");
         private static readonly Color HoverColor = (Color)ColorConverter.ConvertFromString("#F6F8FA");
         private static readonly Color BorderColor = (Color)ColorConverter.ConvertFromString("#D0D7DE");
         private static readonly Color DescriptionColor = (Color)ColorConverter.ConvertFromString("#6E7781");
         private static readonly Color IconBackgroundColor = (Color)ColorConverter.ConvertFromString("#EEF4FF");
         private static readonly Color IconForegroundColor = (Color)ColorConverter.ConvertFromString("#0969DA");
+        private static readonly Color SelectionStripeColor = (Color)ColorConverter.ConvertFromString("#005FCC");
 
         private static readonly Brush BackgroundBrush = new SolidColorBrush(BackgroundColor);
         private static readonly Brush ForegroundBrush = new SolidColorBrush(ForegroundColor);
@@ -54,6 +55,7 @@ namespace OpenHintSQL.UI
         private static readonly Brush DescriptionBrush = new SolidColorBrush(DescriptionColor);
         private static readonly Brush IconBackgroundBrush = new SolidColorBrush(IconBackgroundColor);
         private static readonly Brush IconForegroundBrush = new SolidColorBrush(IconForegroundColor);
+        private static readonly Brush SelectionStripeBrush = new SolidColorBrush(SelectionStripeColor);
         private static readonly Brush TransparentBrush = Brushes.Transparent;
 
         // ═══════════════════════════════════════════════════════════════
@@ -63,10 +65,10 @@ namespace OpenHintSQL.UI
         private const double PopupMaxHeight = 300;
         private const double PopupWidth = 440;
         private const double DetailPopupMinWidth = 240;
-        private const double DetailPopupPreferredWidth = 320;
-        private const double DetailPopupMaxWidth = 420;
-        private const double DetailPopupPreferredMaxHeight = 320;
-        private const double DetailPopupMaxHeight = 380;
+        private const double DetailPopupPreferredWidth = 360;
+        private const double DetailPopupMaxWidth = 520;
+        private const double DetailPopupPreferredMaxHeight = PopupMaxHeight;
+        private const double DetailPopupMaxHeight = 420;
         private const double DetailPopupGap = 4;
         private const double DetailPopupViewportMargin = 14;
         private const double DetailPopupMinHeight = 96;
@@ -560,7 +562,7 @@ namespace OpenHintSQL.UI
 
         /// <summary>
         /// Creates the data template for each completion item.
-        /// Format: [Icon] Text  Description
+        /// Format: [Icon] Text
         /// </summary>
         private DataTemplate CreateItemTemplate()
         {
@@ -569,7 +571,7 @@ namespace OpenHintSQL.UI
             var rowBorderFactory = new FrameworkElementFactory(typeof(Border));
             rowBorderFactory.SetBinding(Border.BackgroundProperty,
                 new System.Windows.Data.Binding("RowTintBrush"));
-            rowBorderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+            rowBorderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(0));
             rowBorderFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(0));
             rowBorderFactory.SetValue(Border.PaddingProperty, new Thickness(0));
             rowBorderFactory.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
@@ -627,16 +629,6 @@ namespace OpenHintSQL.UI
             textFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 10, 0));
             stackFactory.AppendChild(textFactory);
 
-            // Description TextBlock (smaller, gray)
-            var descFactory = new FrameworkElementFactory(typeof(TextBlock));
-            descFactory.SetBinding(TextBlock.TextProperty,
-                new System.Windows.Data.Binding("Description"));
-            descFactory.SetValue(TextBlock.ForegroundProperty, DescriptionBrush);
-            descFactory.SetValue(TextBlock.FontSizeProperty, 11.0);
-            descFactory.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
-            descFactory.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
-            stackFactory.AppendChild(descFactory);
-
             rowBorderFactory.AppendChild(stackFactory);
             template.VisualTree = rowBorderFactory;
             return template;
@@ -652,6 +644,7 @@ namespace OpenHintSQL.UI
             // Default background
             style.Setters.Add(new Setter(Control.BackgroundProperty, TransparentBrush));
             style.Setters.Add(new Setter(Control.ForegroundProperty, ForegroundBrush));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, TransparentBrush));
             style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
             style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(2, 3, 2, 3)));
             style.Setters.Add(new Setter(Control.MarginProperty, new Thickness(2, 1, 2, 1)));
@@ -667,6 +660,8 @@ namespace OpenHintSQL.UI
             };
             selectedTrigger.Setters.Add(new Setter(Control.BackgroundProperty, SelectionBrush));
             selectedTrigger.Setters.Add(new Setter(Control.ForegroundProperty, ForegroundBrush));
+            selectedTrigger.Setters.Add(new Setter(Control.BorderBrushProperty, SelectionStripeBrush));
+            selectedTrigger.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(4, 0, 0, 0)));
             style.Triggers.Add(selectedTrigger);
 
             var hoverTrigger = new Trigger
@@ -677,6 +672,15 @@ namespace OpenHintSQL.UI
             hoverTrigger.Setters.Add(new Setter(Control.BackgroundProperty, HoverBrush));
             hoverTrigger.Setters.Add(new Setter(Control.ForegroundProperty, ForegroundBrush));
             style.Triggers.Add(hoverTrigger);
+
+            var selectedHoverTrigger = new MultiTrigger();
+            selectedHoverTrigger.Conditions.Add(new Condition(ListBoxItem.IsSelectedProperty, true));
+            selectedHoverTrigger.Conditions.Add(new Condition(ListBoxItem.IsMouseOverProperty, true));
+            selectedHoverTrigger.Setters.Add(new Setter(Control.BackgroundProperty, SelectionBrush));
+            selectedHoverTrigger.Setters.Add(new Setter(Control.ForegroundProperty, ForegroundBrush));
+            selectedHoverTrigger.Setters.Add(new Setter(Control.BorderBrushProperty, SelectionStripeBrush));
+            selectedHoverTrigger.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(4, 0, 0, 0)));
+            style.Triggers.Add(selectedHoverTrigger);
 
             return style;
         }
@@ -812,8 +816,10 @@ namespace OpenHintSQL.UI
                 _detailPopup.HorizontalOffset = layout.HorizontalOffset;
                 _detailPopup.VerticalOffset = layout.VerticalOffset;
                 _detailBorder.Width = layout.Width;
-                _detailBorder.MaxHeight = layout.MaxHeight;
-                _detailScrollViewer.MaxHeight = Math.Max(DetailPopupMinHeight - 8, layout.MaxHeight - 8);
+                _detailBorder.Height = layout.Height;
+                _detailBorder.MaxHeight = layout.Height;
+                _detailScrollViewer.Height = Math.Max(DetailPopupMinHeight - 8, layout.Height - 8);
+                _detailScrollViewer.MaxHeight = Math.Max(DetailPopupMinHeight - 8, layout.Height - 8);
             }
             catch (Exception ex)
             {
@@ -1054,7 +1060,7 @@ namespace OpenHintSQL.UI
                 return new DetailPopupLayout
                 {
                     Width = preferredWidth,
-                    MaxHeight = DetailPopupPreferredMaxHeight,
+                    Height = DetailPopupPreferredMaxHeight,
                     HorizontalOffset = _popup.HorizontalOffset + PopupWidth + DetailPopupGap,
                     VerticalOffset = _popup.VerticalOffset
                 };
@@ -1080,19 +1086,18 @@ namespace OpenHintSQL.UI
 
             _detailBorder.Width = width;
             _detailBorder.Measure(new Size(width, DetailPopupMaxHeight));
-            double desiredHeight = Math.Min(_detailBorder.DesiredSize.Height, DetailPopupMaxHeight);
             double top = Math.Max(workArea.Top + DetailPopupViewportMargin, mainBounds.Top);
             double availableHeight = workArea.Bottom - top - DetailPopupViewportMargin;
-            double maxHeight = Math.Max(
+            double targetHeight = Math.Max(
                 DetailPopupMinHeight,
-                Math.Min(DetailPopupMaxHeight, Math.Min(desiredHeight, availableHeight)));
+                Math.Min(DetailPopupMaxHeight, Math.Min(mainBounds.Height, availableHeight)));
 
             double verticalOffset = top;
-            if (verticalOffset + maxHeight > workArea.Bottom - DetailPopupViewportMargin)
+            if (verticalOffset + targetHeight > workArea.Bottom - DetailPopupViewportMargin)
             {
                 verticalOffset = Math.Max(
                     workArea.Top + DetailPopupViewportMargin,
-                    workArea.Bottom - DetailPopupViewportMargin - maxHeight);
+                    workArea.Bottom - DetailPopupViewportMargin - targetHeight);
             }
 
             if (placeRight)
@@ -1100,7 +1105,7 @@ namespace OpenHintSQL.UI
                 return new DetailPopupLayout
                 {
                     Width = width,
-                    MaxHeight = maxHeight,
+                    Height = targetHeight,
                     HorizontalOffset = mainBounds.Right + DetailPopupGap,
                     VerticalOffset = verticalOffset
                 };
@@ -1109,7 +1114,7 @@ namespace OpenHintSQL.UI
             return new DetailPopupLayout
             {
                 Width = width,
-                MaxHeight = maxHeight,
+                Height = targetHeight,
                 HorizontalOffset = Math.Max(
                     workArea.Left + DetailPopupViewportMargin,
                     mainBounds.Left - width - DetailPopupGap),
@@ -1139,7 +1144,7 @@ namespace OpenHintSQL.UI
         private sealed class DetailPopupLayout
         {
             public double Width { get; set; }
-            public double MaxHeight { get; set; }
+            public double Height { get; set; }
             public double HorizontalOffset { get; set; }
             public double VerticalOffset { get; set; }
         }

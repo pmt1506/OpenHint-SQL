@@ -479,8 +479,21 @@ namespace OpenHintSQL.Completion
             try
             {
                 string word = _textView.GetWordBeforeCaret();
+                string fullText = _textView.GetAllText();
+                int caretOffset = _textView.GetCaretPosition();
+                var context = SqlContextParser.GetContext(fullText, caretOffset);
 
-                if (string.IsNullOrEmpty(word) || word.Length < MinPrefixLength)
+                if (string.IsNullOrEmpty(word))
+                {
+                    if (IsObjectNameContext(context) || IsPopupVisible())
+                    {
+                        DismissPopup();
+                        return;
+                    }
+
+                    DismissPopup();
+                }
+                else if (word.Length < MinPrefixLength)
                 {
                     DismissPopup();
                 }
@@ -514,6 +527,20 @@ namespace OpenHintSQL.Completion
             }
         }
 
+        private static bool IsObjectNameContext(SqlContext context)
+        {
+            switch (context)
+            {
+                case SqlContext.FromClause:
+                case SqlContext.JoinClause:
+                case SqlContext.UpdateTarget:
+                case SqlContext.InsertColumns:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         /// <summary>
         /// Triggers or updates the completion popup based on the current word before the caret.
         /// </summary>
@@ -533,6 +560,12 @@ namespace OpenHintSQL.Completion
                 int caretOffset = _textView.GetCaretPosition();
                 var context = SqlContextParser.GetContext(fullText, caretOffset);
                 bool hasContextPopup = IsPopupVisible() || context == SqlContext.UseDatabase;
+
+                if (!allowEmptyPrefix && string.IsNullOrEmpty(prefix))
+                {
+                    DismissPopup();
+                    return;
+                }
 
                 if (!allowEmptyPrefix &&
                     !hasContextPopup &&
@@ -1035,6 +1068,16 @@ namespace OpenHintSQL.Completion
                 {
                     ShowSettingsWindow();
                     e.Handled = true;
+                    return;
+                }
+
+                if ((e.Key == Key.Back || e.Key == Key.Delete) &&
+                    Keyboard.Modifiers == ModifierKeys.Control)
+                {
+                    var dispatcher = _textView?.VisualElement?.Dispatcher;
+                    dispatcher?.BeginInvoke(
+                        new Action(HandleBackspaceDelete),
+                        DispatcherPriority.Background);
                 }
             }
             catch (Exception ex)
