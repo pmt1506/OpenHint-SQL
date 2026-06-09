@@ -389,7 +389,7 @@ namespace OpenHintSQL.Completion
         {
             try
             {
-                TriggerCompletion(allowEmptyPrefix: true);
+                TriggerCompletion(allowEmptyPrefix: true, explicitInvocation: true);
                 return IsPopupVisible() ? VSConstants.S_OK : VSConstants.E_FAIL;
             }
             catch (Exception ex)
@@ -450,7 +450,8 @@ namespace OpenHintSQL.Completion
                     // Otherwise dismiss.
                     string fullText = _textView.GetAllText();
                     int caretOffset = _textView.GetCaretPosition();
-                    if (SqlContextParser.TryGetClauseAtCaret(fullText, caretOffset, out _))
+                    if (SqlContextParser.TryGetClauseAtCaret(fullText, caretOffset, out var clauseContext) &&
+                        ShouldAutoTriggerClauseCompletion(clauseContext))
                     {
                         TriggerCompletion(allowEmptyPrefix: true);
                     }
@@ -544,14 +545,15 @@ namespace OpenHintSQL.Completion
         /// <summary>
         /// Triggers or updates the completion popup based on the current word before the caret.
         /// </summary>
-        private void TriggerCompletion() => TriggerCompletion(allowEmptyPrefix: false);
+        private void TriggerCompletion() => TriggerCompletion(allowEmptyPrefix: false, explicitInvocation: false);
+        private void TriggerCompletion(bool allowEmptyPrefix) => TriggerCompletion(allowEmptyPrefix, explicitInvocation: false);
 
         /// <summary>
         /// Triggers or updates the completion popup. When <paramref name="allowEmptyPrefix"/>
         /// is true, the <see cref="MinPrefixLength"/> gate is skipped — the engine itself
         /// decides whether an empty prefix makes sense for the current SQL context.
         /// </summary>
-        private void TriggerCompletion(bool allowEmptyPrefix)
+        private void TriggerCompletion(bool allowEmptyPrefix, bool explicitInvocation)
         {
             try
             {
@@ -559,6 +561,7 @@ namespace OpenHintSQL.Completion
                 string fullText = _textView.GetAllText();
                 int caretOffset = _textView.GetCaretPosition();
                 var context = SqlContextParser.GetContext(fullText, caretOffset);
+                bool inDotContext = SqlContextParser.GetTableContext(fullText, caretOffset) != null;
                 bool hasContextPopup = IsPopupVisible() || context == SqlContext.UseDatabase;
 
                 if (!allowEmptyPrefix && string.IsNullOrEmpty(prefix))
@@ -575,10 +578,18 @@ namespace OpenHintSQL.Completion
                     return;
                 }
 
+                if (!explicitInvocation &&
+                    !IsPopupVisible() &&
+                    context == SqlContext.JoinClause)
+                {
+                    DismissPopup();
+                    return;
+                }
+
                 // If the popup is already visible AND the user is still narrowing a word,
                 // just update the filter. Empty-prefix triggers (FROM␣ / JOIN␣ / dot) always
                 // need a fresh query — they swap the popup's contents entirely.
-                if (IsPopupVisible() && !string.IsNullOrEmpty(prefix) && !_popup.IsShowingStatus)
+                if (IsPopupVisible() && !string.IsNullOrEmpty(prefix) && !_popup.IsShowingStatus && !inDotContext)
                 {
                     StartNativeCompletionSuppression();
                     _popup.UpdateFilter(prefix);
@@ -690,7 +701,8 @@ namespace OpenHintSQL.Completion
                     // (e.g. `ssf` → `SELECT * FROM `), immediately pop the table list.
                     string fullText = _textView.GetAllText();
                     int caretAfter = _textView.GetCaretPosition();
-                    if (SqlContextParser.TryGetClauseAtCaret(fullText, caretAfter, out _))
+                    if (SqlContextParser.TryGetClauseAtCaret(fullText, caretAfter, out var clauseContext) &&
+                        ShouldAutoTriggerClauseCompletion(clauseContext))
                     {
                         TriggerCompletion(allowEmptyPrefix: true);
                     }
@@ -860,6 +872,20 @@ namespace OpenHintSQL.Completion
         private static bool IsObjectReferencePrefixChar(char c)
         {
             return char.IsLetterOrDigit(c) || c == '_' || c == '.' || c == '[' || c == ']';
+        }
+
+        private static bool ShouldAutoTriggerClauseCompletion(SqlContext context)
+        {
+            switch (context)
+            {
+                case SqlContext.JoinClause:
+                    // JOIN completion is the heaviest branch because it computes FK and
+                    // heuristic suggestions. Keep it manual so join snippets behave like
+                    // plain text expansion instead of forcing an immediate popup refresh.
+                    return false;
+                default:
+                    return true;
+            }
         }
 
         /// <summary>
