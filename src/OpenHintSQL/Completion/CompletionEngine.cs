@@ -53,9 +53,16 @@ namespace OpenHintSQL.Completion
         {
             try
             {
+                if (SqlContextParser.IsInsideQuotedText(fullText, caretOffset) &&
+                    !IsQuotedSqlCompletionAllowed(fullText, caretOffset))
+                    return new List<CompletionItemData>();
+
+                var completionScope = GetCompletionScope(fullText, caretOffset);
+
                 // Parse the SQL context at the caret position
                 var context = SqlContextParser.GetContext(fullText, caretOffset);
                 bool emptyPrefix = string.IsNullOrEmpty(prefix);
+                bool variablePrefix = !emptyPrefix && prefix[0] == '@';
                 bool inDotContext = SqlContextParser.GetTableContext(fullText, caretOffset) != null;
                 bool inUseDatabasePosition = context == SqlContext.UseDatabase &&
                     IsUseDatabasePosition(fullText, caretOffset);
@@ -80,7 +87,7 @@ namespace OpenHintSQL.Completion
                 // a FROM/JOIN/UPDATE/INSERT target.
                 if (!inDotContext && IsTableObjectContext(context, fullText, caretOffset, prefix))
                 {
-                    AddSchemaMatches(results, prefix, context, fullText, caretOffset, server, database, connectionString);
+                    AddSchemaMatches(results, prefix, context, completionScope.text, completionScope.caretOffset, server, database, connectionString);
                     return SortAndLimit(results, prefix);
                 }
 
@@ -89,10 +96,19 @@ namespace OpenHintSQL.Completion
                 if (!emptyPrefix)
                 {
                     AddKeywordMatches(results, prefix);
-                    AddSnippetMatches(results, prefix);
+                    if (!variablePrefix)
+                        AddSnippetMatches(results, prefix);
                 }
 
-                AddSchemaMatches(results, prefix, context, fullText, caretOffset, server, database, connectionString);
+                if (variablePrefix || context == SqlContext.DeclareVariable || context == SqlContext.Exec)
+                {
+                    AddVariableMatches(results, prefix, completionScope.text, completionScope.caretOffset);
+                }
+
+                if (variablePrefix)
+                    return SortAndLimit(results, prefix);
+
+                AddSchemaMatches(results, prefix, context, completionScope.text, completionScope.caretOffset, server, database, connectionString);
 
                 return SortAndLimit(results, prefix);
             }
@@ -101,6 +117,151 @@ namespace OpenHintSQL.Completion
                 Logger.Error("CompletionEngine.GetCompletionItems failed", ex);
                 return new List<CompletionItemData>();
             }
+        }
+
+        /// <summary>
+        /// Allows completion inside a quoted SQL fragment only when it appears to be
+        /// a dynamic-SQL string inside a BEGIN/END branch, typically after EXEC.
+        /// This keeps ordinary string literals silent while still supporting
+        /// suggestions for text being assembled with EXEC('...').
+        /// </summary>
+        private static bool IsQuotedSqlCompletionAllowed(string fullText, int caretOffset)
+        {
+            if (string.IsNullOrEmpty(fullText) || caretOffset <= 0)
+                return false;
+
+            var statementScope = GetCurrentStatementScope(fullText, caretOffset);
+            if (string.IsNullOrWhiteSpace(statementScope.text))
+                return false;
+
+            int branchStart = FindCurrentBranchStart(statementScope.text, statementScope.caretOffset);
+            if (branchStart <= 0)
+                return false;
+
+            int quoteStart = FindCurrentSingleQuoteStart(statementScope.text, statementScope.caretOffset);
+            if (quoteStart < 0 || quoteStart <= branchStart)
+                return false;
+
+            return ContainsDynamicSqlKeyword(statementScope.text, branchStart, quoteStart);
+        }
+
+        /// <summary>
+        /// Finds the opening single quote for the literal that currently contains the caret.
+        /// Returns -1 when the caret is not inside a single-quoted string.
+        /// </summary>
+        private static int FindCurrentSingleQuoteStart(string text, int caretOffset)
+        {
+            if (string.IsNullOrEmpty(text) || caretOffset <= 0)
+                return -1;
+
+            int limit = Math.Min(Math.Max(caretOffset, 0), text.Length);
+            bool inSingleQuote = false;
+            bool inBacktick = false;
+            int quoteStart = -1;
+
+            for (int i = 0; i < limit; i++)
+            {
+                char c = text[i];
+
+                if (inSingleQuote)
+                {
+                    if (c == '\'')
+                    {
+                        if (i + 1 < limit && text[i + 1] == '\'')
+                        {
+                            i++;
+                            continue;
+                        }
+
+                        inSingleQuote = false;
+                        quoteStart = -1;
+                    }
+
+                    continue;
+                }
+
+                if (inBacktick)
+                {
+                    if (c == '`')
+                        inBacktick = false;
+
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    inSingleQuote = true;
+                    quoteStart = i;
+                    continue;
+                }
+
+                if (c == '`')
+                    inBacktick = true;
+            }
+
+            return inSingleQuote ? quoteStart : -1;
+        }
+
+        /// <summary>
+        /// Checks whether a dynamic-SQL keyword such as EXEC/EXECUTE appears in the
+        /// non-quoted text between the current branch start and the opening quote.
+        /// </summary>
+        private static bool ContainsDynamicSqlKeyword(string text, int branchStart, int quoteStart)
+        {
+            if (string.IsNullOrEmpty(text) || branchStart < 0 || quoteStart <= branchStart)
+                return false;
+
+            bool inSingleQuote = false;
+            bool inBacktick = false;
+
+            for (int i = Math.Max(branchStart, 0); i < quoteStart; i++)
+            {
+                char c = text[i];
+
+                if (inSingleQuote)
+                {
+                    if (c == '\'')
+                    {
+                        if (i + 1 < quoteStart && text[i + 1] == '\'')
+                        {
+                            i++;
+                            continue;
+                        }
+
+                        inSingleQuote = false;
+                    }
+
+                    continue;
+                }
+
+                if (inBacktick)
+                {
+                    if (c == '`')
+                        inBacktick = false;
+
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    inSingleQuote = true;
+                    continue;
+                }
+
+                if (c == '`')
+                {
+                    inBacktick = true;
+                    continue;
+                }
+
+                if (!char.IsLetter(c))
+                    continue;
+
+                if (IsKeywordAt(text, i, "EXEC") || IsKeywordAt(text, i, "EXECUTE"))
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -165,8 +326,8 @@ namespace OpenHintSQL.Completion
             List<CompletionItemData> results,
             string prefix,
             SqlContext context,
-            string fullText,
-            int caretOffset,
+            string scopeText,
+            int scopeCaretOffset,
             string server,
             string database,
             string connectionString)
@@ -220,9 +381,9 @@ namespace OpenHintSQL.Completion
 
                 // Dot-context (alias-qualified) wins regardless of the surrounding clause:
                 // typing `c.` always means "columns of whatever c resolves to".
-                if (SqlContextParser.GetTableContext(fullText, caretOffset) != null)
+                if (SqlContextParser.GetTableContext(scopeText, scopeCaretOffset) != null)
                 {
-                    AddColumns(results, schema, prefix, fullText, caretOffset, context);
+                    AddColumns(results, schema, prefix, scopeText, scopeCaretOffset, context);
                     return;
                 }
 
@@ -230,17 +391,17 @@ namespace OpenHintSQL.Completion
                 {
                     // ── Table-position contexts ─────────────────────────────────
                     case SqlContext.FromClause:
-                        AddTablesAndViews(results, schema, prefix, includeAlias: true, excludeCurrentJoin: false, fullText: fullText, caretOffset: caretOffset);
+                        AddTablesAndViews(results, schema, prefix, includeAlias: true, excludeCurrentJoin: false, fullText: scopeText, caretOffset: scopeCaretOffset);
                         break;
 
                     case SqlContext.UpdateTarget:
-                        AddTablesAndViews(results, schema, prefix, includeAlias: false, excludeCurrentJoin: false, fullText: fullText, caretOffset: caretOffset);
+                        AddTablesAndViews(results, schema, prefix, includeAlias: false, excludeCurrentJoin: false, fullText: scopeText, caretOffset: scopeCaretOffset);
                         break;
 
                     case SqlContext.JoinClause:
                         // FK-aware JOIN suggestions float above generic table matches.
-                        AddJoinSuggestions(results, schema, fullText, caretOffset, prefix);
-                        AddTablesAndViews(results, schema, prefix, includeAlias: true, excludeCurrentJoin: true, fullText: fullText, caretOffset: caretOffset);
+                        AddJoinSuggestions(results, schema, scopeText, scopeCaretOffset, prefix);
+                        AddTablesAndViews(results, schema, prefix, includeAlias: true, excludeCurrentJoin: true, fullText: scopeText, caretOffset: scopeCaretOffset);
                         break;
 
                     case SqlContext.InsertColumns:
@@ -249,8 +410,8 @@ namespace OpenHintSQL.Completion
                         // we're in the column-list position. Treat the table-name case
                         // as the only schema-aware branch; columns inside the paren are
                         // left to the dot-context path (typing `foo.` works there).
-                        if (ParenDepthAfterContextKeyword(fullText, caretOffset) == 0)
-                            AddTablesAndViews(results, schema, prefix, includeAlias: false, excludeCurrentJoin: false, fullText: fullText, caretOffset: caretOffset);
+                        if (ParenDepthAfterContextKeyword(scopeText, scopeCaretOffset) == 0)
+                            AddTablesAndViews(results, schema, prefix, includeAlias: false, excludeCurrentJoin: false, fullText: scopeText, caretOffset: scopeCaretOffset);
                         break;
 
                     // ── Column-position contexts ────────────────────────────────
@@ -260,14 +421,14 @@ namespace OpenHintSQL.Completion
                     case SqlContext.GroupByClause:
                     case SqlContext.HavingClause:
                     case SqlContext.SetClause:
-                        AddScopedAliasSuggestions(results, schema, prefix, fullText, caretOffset, prioritizeCurrentJoinTarget: false, includeTablesAfterCaret: true);
-                        AddColumns(results, schema, prefix, fullText, caretOffset, context);
+                        AddScopedAliasSuggestions(results, schema, prefix, scopeText, scopeCaretOffset, prioritizeCurrentJoinTarget: false, includeTablesAfterCaret: true);
+                        AddColumns(results, schema, prefix, scopeText, scopeCaretOffset, context);
                         break;
 
                     case SqlContext.OnClause:
-                        AddScopedAliasSuggestions(results, schema, prefix, fullText, caretOffset, prioritizeCurrentJoinTarget: true, includeTablesAfterCaret: false);
-                        AddOnClauseJoinColumnSuggestions(results, schema, prefix, fullText, caretOffset);
-                        AddColumns(results, schema, prefix, fullText, caretOffset, context);
+                        AddScopedAliasSuggestions(results, schema, prefix, scopeText, scopeCaretOffset, prioritizeCurrentJoinTarget: true, includeTablesAfterCaret: false);
+                        AddOnClauseJoinColumnSuggestions(results, schema, prefix, scopeText, scopeCaretOffset);
+                        AddColumns(results, schema, prefix, scopeText, scopeCaretOffset, context);
                         break;
 
                     // ── Other ───────────────────────────────────────────────────
@@ -578,7 +739,7 @@ namespace OpenHintSQL.Completion
         private static CompletionItemData BuildTableItem(TableInfo t, bool includeAlias, HashSet<string> usedAliases)
         {
             var insertText = BuildObjectInsertText(t, includeAlias, usedAliases);
-            int usageScore = TableUsageProvider.GetUsageScore(t?.FullName);
+            int usageScore = TableUsageProvider.GetUsageScore(CompletionItemKind.Table, t?.FullName);
             return new CompletionItemData
             {
                 Text = t.FullName,
@@ -587,8 +748,37 @@ namespace OpenHintSQL.Completion
                 Kind = CompletionItemKind.Table,
                 Priority = 10,
                 UsageScore = usageScore,
-                IsFavorite = TableUsageProvider.IsFavorite(t?.FullName),
+                IsFavorite = TableUsageProvider.IsFavorite(CompletionItemKind.Table, t?.FullName),
+                UsageKey = t?.FullName,
                 IconKey = "Table"
+            };
+        }
+
+        private static CompletionItemData BuildColumnItem(
+            ColumnInfo col,
+            string sourceTableName = null,
+            int priority = 70,
+            int? sortOrder = null)
+        {
+            if (col == null)
+                return null;
+
+            string usageKey = string.IsNullOrWhiteSpace(sourceTableName)
+                ? col.Name
+                : $"{sourceTableName}.{col.Name}";
+
+            return new CompletionItemData
+            {
+                Text = col.Name,
+                InsertText = col.Name,
+                Description = col.DisplayText,
+                Kind = CompletionItemKind.Column,
+                Priority = priority,
+                SortOrder = sortOrder,
+                UsageScore = TableUsageProvider.GetUsageScore(CompletionItemKind.Column, usageKey),
+                IsFavorite = TableUsageProvider.IsFavorite(CompletionItemKind.Column, usageKey),
+                UsageKey = usageKey,
+                IconKey = "Column"
             };
         }
 
@@ -645,13 +835,13 @@ namespace OpenHintSQL.Completion
             if (schema == null || string.IsNullOrEmpty(fullText))
                 return aliases;
 
-            int limit = Math.Min(Math.Max(caretOffset, 0), fullText.Length);
-            if (limit == 0)
+            var completionScope = GetCompletionScope(fullText, caretOffset);
+            if (string.IsNullOrEmpty(completionScope.text))
                 return aliases;
 
             var scopeText = excludeCurrentJoin
-                ? GetCompletedJoinScopeText(fullText, limit)
-                : fullText.Substring(0, limit);
+                ? GetCompletedJoinScopeText(completionScope.text, completionScope.caretOffset)
+                : completionScope.text.Substring(0, completionScope.caretOffset);
 
             foreach (var scoped in ResolveScopedTables(scopeText, schema))
             {
@@ -688,7 +878,7 @@ namespace OpenHintSQL.Completion
         {
             public TableInfo Table;
             public string Alias; // user-provided alias if any, else null (we'll fall back to table name)
-            public string EffectiveAlias => string.IsNullOrEmpty(Alias) ? Table.Name : Alias;
+            public string EffectiveAlias => !string.IsNullOrEmpty(Alias) ? Alias : Table?.Name;
         }
 
         /// <summary>
@@ -708,11 +898,11 @@ namespace OpenHintSQL.Completion
                 if (schema == null || !schema.IsLoaded)
                     return;
 
-                int limit = Math.Min(Math.Max(caretOffset, 0), fullText?.Length ?? 0);
-                if (limit == 0)
+                var completionScope = GetCompletionScope(fullText, caretOffset);
+                if (string.IsNullOrEmpty(completionScope.text))
                     return;
 
-                var scopeText = GetCompletedJoinScopeText(fullText, limit);
+                var scopeText = GetCompletedJoinScopeText(completionScope.text, completionScope.caretOffset);
                 var scoped = ResolveScopedTables(scopeText, schema);
                 if (scoped.Count == 0)
                     return;
@@ -729,6 +919,8 @@ namespace OpenHintSQL.Completion
                 for (int scopedIndex = scoped.Count - 1; scopedIndex >= 0; scopedIndex--)
                 {
                     var scopedRef = scoped[scopedIndex];
+                    if (scopedRef.Table == null)
+                        continue;
 
                     // Outgoing FKs: this scoped table has FKs to other tables.
                     foreach (var fk in scopedRef.Table.ForeignKeys)
@@ -833,6 +1025,8 @@ namespace OpenHintSQL.Completion
                 for (int scopedIndex = scoped.Count - 1; scopedIndex >= 0; scopedIndex--)
                 {
                     var scopedRef = scoped[scopedIndex];
+                    if (scopedRef.Table == null)
+                        continue;
                     foreach (var targetTable in allTargets)
                     {
                         if (targetTable == null || ReferenceEquals(targetTable, scopedRef.Table))
@@ -1086,6 +1280,10 @@ namespace OpenHintSQL.Completion
         private static List<ScopedTable> ResolveScopedTables(string scopeText, DatabaseSchema schema)
         {
             var result = new List<ScopedTable>();
+            if (string.IsNullOrWhiteSpace(scopeText) || schema == null)
+                return result;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var matches = JoinScopePattern.Matches(scopeText);
 
             foreach (Match m in matches)
@@ -1098,10 +1296,159 @@ namespace OpenHintSQL.Completion
                 if (table == null)
                     continue;
 
-                result.Add(new ScopedTable { Table = table, Alias = alias });
+                AddScopedTable(result, seen, new ScopedTable { Table = table, Alias = alias });
+            }
+
+            foreach (var alias in GetDerivedTableAliases(scopeText))
+            {
+                AddScopedTable(result, seen, new ScopedTable { Table = null, Alias = alias });
             }
 
             return result;
+        }
+
+        private static void AddScopedTable(List<ScopedTable> result, HashSet<string> seen, ScopedTable scopedTable)
+        {
+            string key = (scopedTable.Table?.FullName ?? string.Empty) + "|" + (scopedTable.Alias ?? string.Empty);
+            if (!seen.Add(key))
+                return;
+
+            result.Add(scopedTable);
+        }
+
+        private static IEnumerable<string> GetDerivedTableAliases(string scopeText)
+        {
+            if (string.IsNullOrWhiteSpace(scopeText))
+                yield break;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var tokenMatches = Regex.Matches(scopeText, @"\b(?:FROM|JOIN)\b", RegexOptions.IgnoreCase);
+            foreach (Match token in tokenMatches)
+            {
+                int openParen = SkipWhitespace(scopeText, token.Index + token.Length);
+                if (openParen >= scopeText.Length || scopeText[openParen] != '(')
+                    continue;
+
+                if (!TryReadDerivedTableAlias(scopeText, openParen, out var alias))
+                    continue;
+
+                if (seen.Add(alias))
+                    yield return alias;
+            }
+        }
+
+        private static bool TryReadDerivedTableAlias(string text, int openParenIndex, out string alias)
+        {
+            alias = null;
+            if (string.IsNullOrEmpty(text) || openParenIndex < 0 || openParenIndex >= text.Length || text[openParenIndex] != '(')
+                return false;
+
+            int depth = 0;
+            bool inSingleQuote = false;
+            bool inBacktick = false;
+            int closeParenIndex = -1;
+
+            for (int i = openParenIndex; i < text.Length; i++)
+            {
+                char c = text[i];
+
+                if (inSingleQuote)
+                {
+                    if (c == '\'')
+                    {
+                        if (i + 1 < text.Length && text[i + 1] == '\'')
+                        {
+                            i++;
+                            continue;
+                        }
+
+                        inSingleQuote = false;
+                    }
+
+                    continue;
+                }
+
+                if (inBacktick)
+                {
+                    if (c == '`')
+                        inBacktick = false;
+
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    inSingleQuote = true;
+                    continue;
+                }
+
+                if (c == '`')
+                {
+                    inBacktick = true;
+                    continue;
+                }
+
+                if (c == '(')
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (c == ')')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        closeParenIndex = i;
+                        break;
+                    }
+                }
+            }
+
+            if (closeParenIndex < 0)
+                return false;
+
+            int aliasStart = SkipWhitespace(text, closeParenIndex + 1);
+            if (aliasStart >= text.Length)
+                return false;
+
+            if (aliasStart + 2 <= text.Length &&
+                string.Equals(text.Substring(aliasStart, 2), "AS", StringComparison.OrdinalIgnoreCase) &&
+                (aliasStart + 2 == text.Length || !IsIdentifierChar(text[aliasStart + 2])))
+            {
+                aliasStart = SkipWhitespace(text, aliasStart + 2);
+            }
+
+            if (aliasStart >= text.Length)
+                return false;
+
+            if (text[aliasStart] == '[')
+            {
+                int aliasEnd = text.IndexOf(']', aliasStart + 1);
+                if (aliasEnd <= aliasStart + 1)
+                    return false;
+
+                alias = text.Substring(aliasStart + 1, aliasEnd - aliasStart - 1);
+                return !string.IsNullOrWhiteSpace(alias);
+            }
+
+            int end = aliasStart;
+            while (end < text.Length && IsIdentifierChar(text[end]))
+                end++;
+
+            if (end <= aliasStart)
+                return false;
+
+            alias = text.Substring(aliasStart, end - aliasStart);
+            return !string.IsNullOrWhiteSpace(alias);
+        }
+
+        private static int SkipWhitespace(string text, int index)
+        {
+            int pos = Math.Max(index, 0);
+            while (pos < text.Length && char.IsWhiteSpace(text[pos]))
+                pos++;
+            return pos;
         }
 
         private static string GetCompletedJoinScopeText(string fullText, int caretOffset)
@@ -1332,17 +1679,9 @@ namespace OpenHintSQL.Completion
                         {
                             if (MatchesColumnPrefix(col.Name, prefix))
                             {
-                                results.Add(new CompletionItemData
-                                {
-                                    Text = col.Name,
-                                    InsertText = col.Name,
-                                    Description = col.DisplayText,
-                                    Kind = CompletionItemKind.Column,
-                                    Priority = 70,
-                                    IconKey = "Column"
-                                });
+                                    results.Add(BuildColumnItem(col, table.FullName));
+                                }
                             }
-                        }
                     }
                 }
             }
@@ -1388,16 +1727,7 @@ namespace OpenHintSQL.Completion
                     if (!emitted.Add(col.Name))
                         continue;
 
-                    results.Add(new CompletionItemData
-                    {
-                        Text = col.Name,
-                        InsertText = col.Name,
-                        Description = col.DisplayText,
-                        Kind = CompletionItemKind.Column,
-                        Priority = 5,
-                        SortOrder = results.Count,
-                        IconKey = "Column"
-                    });
+                    results.Add(BuildColumnItem(col, table.FullName, priority: 5, sortOrder: results.Count));
                 }
             }
 
@@ -1416,15 +1746,7 @@ namespace OpenHintSQL.Completion
                 {
                     if (MatchesColumnPrefix(col.Name, prefix))
                     {
-                        results.Add(new CompletionItemData
-                        {
-                            Text = col.Name,
-                            InsertText = col.Name,
-                            Description = col.DisplayText,
-                            Kind = CompletionItemKind.Column,
-                            Priority = 70,
-                            IconKey = "Column"
-                        });
+                        results.Add(BuildColumnItem(col, table.FullName));
                     }
                 }
             }
@@ -1549,6 +1871,117 @@ namespace OpenHintSQL.Completion
             return (text, safeCaret - start);
         }
 
+        private static (string text, int caretOffset) GetCompletionScope(string fullText, int caretOffset)
+        {
+            var statementScope = GetCurrentStatementScope(fullText, caretOffset);
+            if (string.IsNullOrWhiteSpace(statementScope.text))
+                return statementScope;
+
+            const int branchScopeThreshold = 1200;
+            if (statementScope.text.Length < branchScopeThreshold)
+                return statementScope;
+
+            int branchStart = FindCurrentBranchStart(statementScope.text, statementScope.caretOffset);
+            if (branchStart <= 0)
+                return statementScope;
+
+            return (statementScope.text.Substring(branchStart), statementScope.caretOffset - branchStart);
+        }
+
+        private static int FindCurrentBranchStart(string text, int caretOffset)
+        {
+            if (string.IsNullOrEmpty(text))
+                return 0;
+
+            int limit = Math.Min(Math.Max(caretOffset, 0), text.Length);
+            int parenDepth = 0;
+            bool inSingleQuote = false;
+            bool inBacktick = false;
+            int lastBoundary = 0;
+
+            for (int i = 0; i < limit; i++)
+            {
+                char c = text[i];
+
+                if (inSingleQuote)
+                {
+                    if (c == '\'')
+                    {
+                        if (i + 1 < limit && text[i + 1] == '\'')
+                        {
+                            i++;
+                            continue;
+                        }
+
+                        inSingleQuote = false;
+                    }
+
+                    continue;
+                }
+
+                if (inBacktick)
+                {
+                    if (c == '`')
+                        inBacktick = false;
+
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    inSingleQuote = true;
+                    continue;
+                }
+
+                if (c == '`')
+                {
+                    inBacktick = true;
+                    continue;
+                }
+
+                if (c == '(')
+                {
+                    parenDepth++;
+                    continue;
+                }
+
+                if (c == ')')
+                {
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                }
+
+                if (parenDepth > 0 || !char.IsLetter(c))
+                    continue;
+
+                if (IsKeywordAt(text, i, "BEGIN") || IsKeywordAt(text, i, "ELSE"))
+                    lastBoundary = i;
+            }
+
+            return lastBoundary;
+        }
+
+        private static bool IsKeywordAt(string text, int index, string keyword)
+        {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(keyword))
+                return false;
+            if (index < 0 || index + keyword.Length > text.Length)
+                return false;
+            if (index > 0 && IsIdentifierChar(text[index - 1]))
+                return false;
+            if (index + keyword.Length < text.Length && IsIdentifierChar(text[index + keyword.Length]))
+                return false;
+
+            for (int i = 0; i < keyword.Length; i++)
+            {
+                if (char.ToUpperInvariant(text[index + i]) != keyword[i])
+                    return false;
+            }
+
+            return true;
+        }
+
         private static int FindStatementStart(string text, int caretOffset)
         {
             int start = 0;
@@ -1667,7 +2100,9 @@ namespace OpenHintSQL.Completion
                     bool isCurrentJoinTarget = prioritizeCurrentJoinTarget && i == lastIndex;
                     bool isPrimaryFromTable = !prioritizeCurrentJoinTarget && i == 0;
                     string insertText = alias + ".";
-                    string tableName = GetObjectInsertName(scopedRef.Table);
+                    string tableName = scopedRef.Table != null
+                        ? GetObjectInsertName(scopedRef.Table)
+                        : alias;
 
                     results.Add(new CompletionItemData
                     {
@@ -1856,14 +2291,16 @@ namespace OpenHintSQL.Completion
 
         private static bool MatchesOnClauseAliasPrefix(ScopedTable scopedRef, string prefix)
         {
-            if (scopedRef.Table == null)
-                return false;
-
             if (string.IsNullOrEmpty(prefix))
                 return true;
 
-            return MatchesPrefix(scopedRef.EffectiveAlias, prefix) ||
-                   MatchesPrefix(scopedRef.Table.Name, prefix) ||
+            if (MatchesPrefix(scopedRef.EffectiveAlias, prefix))
+                return true;
+
+            if (scopedRef.Table == null)
+                return false;
+
+            return MatchesPrefix(scopedRef.Table.Name, prefix) ||
                    MatchesPrefix(scopedRef.Table.FullName, prefix);
         }
 
@@ -1916,6 +2353,102 @@ namespace OpenHintSQL.Completion
             catch (Exception ex)
             {
                 Logger.Error("AddProcedures failed", ex);
+            }
+        }
+
+        /// <summary>
+        /// Adds variable and parameter suggestions for `@...` prefixes.
+        /// Pulls from the current procedure header and local DECLARE statements.
+        /// </summary>
+        private static void AddVariableMatches(
+            List<CompletionItemData> results,
+            string prefix,
+            string fullText,
+            int caretOffset)
+        {
+            try
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                string statementText = GetCurrentStatementScope(fullText, caretOffset).text;
+
+                foreach (var parameterName in GetCurrentProcedureParameterNames(statementText))
+                {
+                    if (!MatchesPrefix(parameterName, prefix) || !seen.Add(parameterName))
+                        continue;
+
+                    results.Add(BuildVariableItem(
+                        parameterName,
+                        $"Procedure parameter: {parameterName}",
+                        priority: 240));
+                }
+
+                foreach (var variableName in GetDeclaredVariableNames(statementText))
+                {
+                    if (!MatchesPrefix(variableName, prefix) || !seen.Add(variableName))
+                        continue;
+
+                    results.Add(BuildVariableItem(
+                        variableName,
+                        $"Declared variable: {variableName}",
+                        priority: 230));
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("AddVariableMatches failed", ex);
+            }
+        }
+
+        private static CompletionItemData BuildVariableItem(string name, string description, int priority)
+        {
+            return new CompletionItemData
+            {
+                Text = name,
+                InsertText = name,
+                Description = description,
+                Kind = CompletionItemKind.Variable,
+                Priority = priority,
+                IconKey = "Variable"
+            };
+        }
+
+        private static IEnumerable<string> GetCurrentProcedureParameterNames(string statementText)
+        {
+            if (string.IsNullOrWhiteSpace(statementText))
+                yield break;
+
+            var headerMatch = Regex.Match(
+                statementText,
+                @"(?is)\b(?:CREATE|ALTER)\s+(?:OR\s+ALTER\s+)?(?:PROC(?:EDURE)?|FUNCTION)\b(?<header>[\s\S]*?)\bAS\b");
+            if (!headerMatch.Success)
+                yield break;
+
+            var header = headerMatch.Groups["header"].Value;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match match in Regex.Matches(header, @"@\w+"))
+            {
+                if (seen.Add(match.Value))
+                    yield return match.Value;
+            }
+        }
+
+        private static IEnumerable<string> GetDeclaredVariableNames(string statementText)
+        {
+            if (string.IsNullOrWhiteSpace(statementText))
+                yield break;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match declareMatch in Regex.Matches(
+                statementText,
+                @"(?im)^\s*DECLARE\b(?<decl>[^\r\n;]*)"))
+            {
+                var declaration = declareMatch.Groups["decl"].Value;
+                foreach (Match variableMatch in Regex.Matches(declaration, @"@\w+"))
+                {
+                    if (seen.Add(variableMatch.Value))
+                        yield return variableMatch.Value;
+                }
             }
         }
 
