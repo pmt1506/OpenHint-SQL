@@ -95,30 +95,6 @@ namespace OpenHintSQL.Schema
         }
 
         /// <summary>
-        /// Starts a background reload from the server when the cached schema is at least
-        /// <paramref name="minAge"/> old. The cached schema keeps serving completions until
-        /// the reload finishes and <see cref="OnSchemaLoaded"/> fires.
-        /// </summary>
-        public static void RefreshInBackgroundIfOlderThan(
-            string server,
-            string database,
-            string connectionString,
-            TimeSpan minAge)
-        {
-            if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(database) || string.IsNullOrEmpty(connectionString))
-                return;
-
-            var key = BuildKey(server, database, connectionString);
-            if (_cache.TryGetValue(key, out var cached) &&
-                cached.IsLoaded &&
-                DateTime.UtcNow - cached.LoadedAt >= minAge)
-            {
-                Logger.Diagnostic($"Explicit completion: refreshing schema for [{key}]");
-                StartBackgroundLoad(key, connectionString, allowDiskCache: false);
-            }
-        }
-
-        /// <summary>
         /// Clears all cached schemas and cancels any in-flight information.
         /// </summary>
         public static void Clear()

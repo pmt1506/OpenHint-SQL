@@ -34,11 +34,30 @@ namespace OpenHintSQL.Completion
         private const int MinDirectResultsBeforeFuzzy = 3;
 
         /// <summary>
-        /// Generates a list of completion items based on the current editor state.
+        /// Generates completion items for a script and caret position. Convenience
+        /// overload that first locates the caret's statement in <paramref name="fullText"/>.
+        /// </summary>
+        public static List<CompletionItemData> GetCompletionItems(
+            string prefix,
+            string fullText,
+            int caretOffset,
+            string server,
+            string database,
+            string connectionString)
+        {
+            return GetCompletionItems(
+                prefix,
+                SqlStatementScanner.Analyze(fullText, caretOffset),
+                server,
+                database,
+                connectionString);
+        }
+
+        /// <summary>
+        /// Generates a list of completion items for the statement around the caret.
         /// </summary>
         /// <param name="prefix">The word being typed (prefix to filter by).</param>
-        /// <param name="fullText">The full text of the editor buffer.</param>
-        /// <param name="caretOffset">The caret's zero-based character offset.</param>
+        /// <param name="scope">The caret's statement and the batch's declared names.</param>
         /// <param name="server">The current SQL Server instance name (may be null).</param>
         /// <param name="database">The current database name (may be null).</param>
         /// <param name="connectionString">The active connection string (may be null).</param>
@@ -48,19 +67,24 @@ namespace OpenHintSQL.Completion
         /// </returns>
         public static List<CompletionItemData> GetCompletionItems(
             string prefix,
-            string fullText,
-            int caretOffset,
+            SqlCaretScope scope,
             string server,
             string database,
             string connectionString)
         {
             try
             {
+                // Everything below works on the caret's statement only; the statement
+                // scanner already cut it out of the batch, so long procedures cost no
+                // more than short scripts.
+                string fullText = scope?.StatementText ?? string.Empty;
+                int caretOffset = scope?.CaretOffset ?? 0;
+
                 if (SqlContextParser.IsInsideQuotedText(fullText, caretOffset) &&
                     !IsQuotedSqlCompletionAllowed(fullText, caretOffset))
                     return new List<CompletionItemData>();
 
-                var completionScope = GetCompletionScope(fullText, caretOffset);
+                var completionScope = (text: fullText, caretOffset);
 
                 // Parse the SQL context at the caret position
                 var context = SqlContextParser.GetContext(fullText, caretOffset);
@@ -105,10 +129,9 @@ namespace OpenHintSQL.Completion
 
                 if (variablePrefix || context == SqlContext.DeclareVariable || context == SqlContext.Exec)
                 {
-                    // Variables are batch-scoped, so read the whole batch rather than the
-                    // current statement: a DECLARE ended by ';' or a procedure header
-                    // followed by statements must still supply its names.
-                    AddVariableMatches(results, prefix, fullText);
+                    // Variables are batch-scoped; the scanner collected every DECLARE and
+                    // procedure parameter before the caret's statement.
+                    AddVariableMatches(results, prefix, scope);
                 }
 
                 if (variablePrefix)
@@ -126,29 +149,21 @@ namespace OpenHintSQL.Completion
         }
 
         /// <summary>
-        /// Allows completion inside a quoted SQL fragment only when it appears to be
-        /// a dynamic-SQL string inside a BEGIN/END branch, typically after EXEC.
-        /// This keeps ordinary string literals silent while still supporting
+        /// Allows completion inside a quoted SQL fragment only when it is a dynamic-SQL
+        /// string, i.e. EXEC/EXECUTE appears before the opening quote in the same
+        /// statement. This keeps ordinary string literals silent while still supporting
         /// suggestions for text being assembled with EXEC('...').
         /// </summary>
-        private static bool IsQuotedSqlCompletionAllowed(string fullText, int caretOffset)
+        private static bool IsQuotedSqlCompletionAllowed(string statementText, int caretOffset)
         {
-            if (string.IsNullOrEmpty(fullText) || caretOffset <= 0)
+            if (string.IsNullOrWhiteSpace(statementText) || caretOffset <= 0)
                 return false;
 
-            var statementScope = GetCurrentStatementScope(fullText, caretOffset);
-            if (string.IsNullOrWhiteSpace(statementScope.text))
+            int quoteStart = FindCurrentSingleQuoteStart(statementText, caretOffset);
+            if (quoteStart <= 0)
                 return false;
 
-            int branchStart = FindCurrentBranchStart(statementScope.text, statementScope.caretOffset);
-            if (branchStart <= 0)
-                return false;
-
-            int quoteStart = FindCurrentSingleQuoteStart(statementScope.text, statementScope.caretOffset);
-            if (quoteStart < 0 || quoteStart <= branchStart)
-                return false;
-
-            return ContainsDynamicSqlKeyword(statementScope.text, branchStart, quoteStart);
+            return ContainsDynamicSqlKeyword(statementText, 0, quoteStart);
         }
 
         /// <summary>
@@ -859,13 +874,11 @@ namespace OpenHintSQL.Completion
             if (schema == null || string.IsNullOrEmpty(fullText))
                 return aliases;
 
-            var completionScope = GetCompletionScope(fullText, caretOffset);
-            if (string.IsNullOrEmpty(completionScope.text))
-                return aliases;
-
+            // fullText is already the caret's statement.
+            int caret = Math.Min(Math.Max(caretOffset, 0), fullText.Length);
             var scopeText = excludeCurrentJoin
-                ? GetCompletedJoinScopeText(completionScope.text, completionScope.caretOffset)
-                : completionScope.text.Substring(0, completionScope.caretOffset);
+                ? GetCompletedJoinScopeText(fullText, caret)
+                : fullText.Substring(0, caret);
 
             foreach (var scoped in ResolveScopedTables(scopeText, schema))
             {
@@ -1445,7 +1458,7 @@ namespace OpenHintSQL.Completion
             string fullText,
             int caretOffset)
         {
-            var statementScope = GetCurrentStatementScope(fullText, caretOffset);
+            var statementScope = (text: fullText ?? string.Empty, caretOffset: Math.Min(Math.Max(caretOffset, 0), fullText?.Length ?? 0));
             var statementText = statementScope.text;
             int statementCaretOffset = statementScope.caretOffset;
 
@@ -1559,7 +1572,7 @@ namespace OpenHintSQL.Completion
             if (schema == null || string.IsNullOrWhiteSpace(aliasOrTable))
                 return null;
 
-            var statementScope = GetCurrentStatementScope(fullText, caretOffset).text;
+            var statementScope = fullText;
             foreach (var scoped in ResolveScopedTables(statementScope, schema))
             {
                 if (string.Equals(scoped.EffectiveAlias, aliasOrTable, StringComparison.OrdinalIgnoreCase) ||
@@ -1608,113 +1621,6 @@ namespace OpenHintSQL.Completion
             return selected;
         }
 
-        private static (string text, int caretOffset) GetCurrentStatementScope(string fullText, int caretOffset)
-        {
-            if (string.IsNullOrEmpty(fullText))
-                return (string.Empty, 0);
-
-            int safeCaret = Math.Min(Math.Max(caretOffset, 0), fullText.Length);
-            int start = FindStatementStart(fullText, safeCaret);
-            int end = FindStatementEnd(fullText, safeCaret);
-
-            if (end < start)
-                end = fullText.Length;
-
-            string text = fullText.Substring(start, end - start);
-            return (text, safeCaret - start);
-        }
-
-        private static (string text, int caretOffset) GetCompletionScope(string fullText, int caretOffset)
-        {
-            var statementScope = GetCurrentStatementScope(fullText, caretOffset);
-            if (string.IsNullOrWhiteSpace(statementScope.text))
-                return statementScope;
-
-            const int branchScopeThreshold = 1200;
-            if (statementScope.text.Length < branchScopeThreshold)
-                return statementScope;
-
-            int branchStart = FindCurrentBranchStart(statementScope.text, statementScope.caretOffset);
-            if (branchStart <= 0)
-                return statementScope;
-
-            return (statementScope.text.Substring(branchStart), statementScope.caretOffset - branchStart);
-        }
-
-        private static int FindCurrentBranchStart(string text, int caretOffset)
-        {
-            if (string.IsNullOrEmpty(text))
-                return 0;
-
-            int limit = Math.Min(Math.Max(caretOffset, 0), text.Length);
-            int parenDepth = 0;
-            bool inSingleQuote = false;
-            bool inBacktick = false;
-            int lastBoundary = 0;
-
-            for (int i = 0; i < limit; i++)
-            {
-                char c = text[i];
-
-                if (inSingleQuote)
-                {
-                    if (c == '\'')
-                    {
-                        if (i + 1 < limit && text[i + 1] == '\'')
-                        {
-                            i++;
-                            continue;
-                        }
-
-                        inSingleQuote = false;
-                    }
-
-                    continue;
-                }
-
-                if (inBacktick)
-                {
-                    if (c == '`')
-                        inBacktick = false;
-
-                    continue;
-                }
-
-                if (c == '\'')
-                {
-                    inSingleQuote = true;
-                    continue;
-                }
-
-                if (c == '`')
-                {
-                    inBacktick = true;
-                    continue;
-                }
-
-                if (c == '(')
-                {
-                    parenDepth++;
-                    continue;
-                }
-
-                if (c == ')')
-                {
-                    if (parenDepth > 0)
-                        parenDepth--;
-                    continue;
-                }
-
-                if (parenDepth > 0 || !char.IsLetter(c))
-                    continue;
-
-                if (IsKeywordAt(text, i, "BEGIN") || IsKeywordAt(text, i, "ELSE"))
-                    lastBoundary = i;
-            }
-
-            return lastBoundary;
-        }
-
         private static bool IsKeywordAt(string text, int index, string keyword)
         {
             if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(keyword))
@@ -1736,97 +1642,6 @@ namespace OpenHintSQL.Completion
         }
 
         /// <summary>
-        /// Start of the statement containing the caret: just after the nearest ';' or
-        /// GO separator line before it. Walks backward line by line and stops at the
-        /// first boundary, so the cost is the statement's size, not the script's.
-        /// </summary>
-        private static int FindStatementStart(string text, int caretOffset)
-        {
-            int segmentEnd = caretOffset;
-
-            while (segmentEnd >= 0)
-            {
-                int lineStart = segmentEnd;
-                while (lineStart > 0 && text[lineStart - 1] != '\n')
-                    lineStart--;
-
-                if (IsGoSeparatorLine(text, lineStart, segmentEnd))
-                    return segmentEnd;
-
-                for (int i = segmentEnd - 1; i >= lineStart; i--)
-                {
-                    if (text[i] == ';')
-                        return i + 1;
-                }
-
-                // Continue with the previous line, ending at its '\n'.
-                segmentEnd = lineStart - 1;
-            }
-
-            return 0;
-        }
-
-        /// <summary>
-        /// End of the statement containing the caret: the next ';' or the start of the
-        /// next GO separator line, whichever comes first.
-        /// </summary>
-        private static int FindStatementEnd(string text, int caretOffset)
-        {
-            int segmentStart = caretOffset;
-
-            while (segmentStart < text.Length)
-            {
-                int lineEnd = text.IndexOf('\n', segmentStart);
-                if (lineEnd < 0)
-                    lineEnd = text.Length;
-
-                if (IsGoSeparatorLine(text, segmentStart, lineEnd))
-                    return segmentStart;
-
-                for (int i = segmentStart; i < lineEnd; i++)
-                {
-                    if (text[i] == ';')
-                        return i;
-                }
-
-                segmentStart = lineEnd + 1;
-            }
-
-            return text.Length;
-        }
-
-        /// <summary>
-        /// True when <c>text[start, end)</c> is a GO batch separator: "GO", optionally
-        /// followed by a repeat count and/or a -- comment, surrounded by blanks.
-        /// </summary>
-        private static bool IsGoSeparatorLine(string text, int start, int end)
-        {
-            int pos = start;
-            while (pos < end && (text[pos] == ' ' || text[pos] == '\t'))
-                pos++;
-
-            if (end - pos < 2 ||
-                char.ToUpperInvariant(text[pos]) != 'G' ||
-                char.ToUpperInvariant(text[pos + 1]) != 'O')
-            {
-                return false;
-            }
-
-            pos += 2;
-            if (pos < end && IsIdentifierChar(text[pos]))
-                return false;
-
-            while (pos < end && (text[pos] == ' ' || text[pos] == '\t'))
-                pos++;
-            while (pos < end && char.IsDigit(text[pos]))
-                pos++;
-            while (pos < end && (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\r'))
-                pos++;
-
-            return pos == end ||
-                   (pos + 1 < end && text[pos] == '-' && text[pos + 1] == '-');
-        }
-
         private static int IndexOfTopLevelFrom(string text)
         {
             if (string.IsNullOrEmpty(text))
@@ -1883,7 +1698,7 @@ namespace OpenHintSQL.Completion
                 string scopeText;
                 if (includeTablesAfterCaret)
                 {
-                    scopeText = GetCurrentStatementScope(fullText, caretOffset).text;
+                    scopeText = fullText ?? string.Empty;
                 }
                 else
                 {
@@ -2316,13 +2131,13 @@ namespace OpenHintSQL.Completion
         private static void AddVariableMatches(
             List<CompletionItemData> results,
             string prefix,
-            string batchText)
+            SqlCaretScope scope)
         {
             try
             {
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-                foreach (var parameterName in GetCurrentProcedureParameterNames(batchText))
+                foreach (var parameterName in scope?.ProcedureParameters ?? Array.Empty<string>())
                 {
                     if (!MatchesPrefix(parameterName, prefix) || !seen.Add(parameterName))
                         continue;
@@ -2333,7 +2148,7 @@ namespace OpenHintSQL.Completion
                         priority: 240));
                 }
 
-                foreach (var variableName in GetDeclaredVariableNames(batchText))
+                foreach (var variableName in scope?.DeclaredVariables ?? Array.Empty<string>())
                 {
                     if (!MatchesPrefix(variableName, prefix) || !seen.Add(variableName))
                         continue;
@@ -2362,67 +2177,6 @@ namespace OpenHintSQL.Completion
                 Priority = priority,
                 IconKey = "Variable"
             };
-        }
-
-        private static readonly Regex ProcedureHeaderPattern = new Regex(
-            @"\b(?:CREATE|ALTER)\s+(?:OR\s+ALTER\s+)?(?:PROC(?:EDURE)?|FUNCTION)\b(?<header>[\s\S]*?)\bAS\b",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-        private static readonly Regex VariableNamePattern = new Regex(
-            @"@\w+",
-            RegexOptions.Compiled);
-
-        /// <summary>
-        /// A DECLARE statement runs until ';' or the next statement keyword, so
-        /// multi-line declarations (<c>DECLARE @a INT,\n @b INT</c>) and DECLAREs
-        /// that don't start a line (<c>BEGIN DECLARE @x INT</c>) are both covered.
-        /// </summary>
-        private static readonly Regex DeclareStatementPattern = new Regex(
-            @"\bDECLARE\b(?<decl>[\s\S]*?)(?=;|\b(?:SELECT|SET|IF|ELSE|WHILE|BEGIN|END|INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|RETURN|DECLARE|PRINT|WITH|OPEN|FETCH|CLOSE|DEALLOCATE|RAISERROR|THROW|TRUNCATE|CREATE|ALTER|DROP)\b|\z)",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-        /// <summary>
-        /// Declared names are the ones that start the declaration or follow a comma;
-        /// other @names inside a declaration are initial values (<c>= @other</c>).
-        /// </summary>
-        private static readonly Regex DeclaredNamePattern = new Regex(
-            @"(?:^|,)\s*(?<name>@\w+)",
-            RegexOptions.Compiled);
-
-        private static IEnumerable<string> GetCurrentProcedureParameterNames(string batchText)
-        {
-            if (string.IsNullOrWhiteSpace(batchText))
-                yield break;
-
-            var headerMatch = ProcedureHeaderPattern.Match(batchText);
-            if (!headerMatch.Success)
-                yield break;
-
-            var header = headerMatch.Groups["header"].Value;
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Match match in VariableNamePattern.Matches(header))
-            {
-                if (seen.Add(match.Value))
-                    yield return match.Value;
-            }
-        }
-
-        private static IEnumerable<string> GetDeclaredVariableNames(string batchText)
-        {
-            if (string.IsNullOrWhiteSpace(batchText))
-                yield break;
-
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Match declareMatch in DeclareStatementPattern.Matches(batchText))
-            {
-                var declaration = declareMatch.Groups["decl"].Value;
-                foreach (Match variableMatch in DeclaredNamePattern.Matches(declaration))
-                {
-                    string name = variableMatch.Groups["name"].Value;
-                    if (seen.Add(name))
-                        yield return name;
-                }
-            }
         }
 
         private static bool IsFuzzyProcedureMatch(ProcedureInfo proc, string prefix)
