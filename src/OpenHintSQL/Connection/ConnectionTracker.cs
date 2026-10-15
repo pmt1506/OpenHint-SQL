@@ -44,6 +44,23 @@ namespace OpenHintSQL.Connection
             public DateTime CheckedAtUtc;
         }
 
+        static ConnectionTracker()
+        {
+            // A cached "type not found" is only valid until another assembly loads:
+            // SSMS loads its assemblies lazily, and the lookup code itself loads them
+            // (TryLoadSsmsAssembly) and then immediately looks the type up again.
+            AppDomain.CurrentDomain.AssemblyLoad += (sender, args) => ForgetTypeMisses();
+        }
+
+        private static void ForgetTypeMisses()
+        {
+            foreach (var entry in TypeLookups)
+            {
+                if (entry.Value.Type == null)
+                    TypeLookups.TryRemove(entry.Key, out _);
+            }
+        }
+
         /// <summary>
         /// Gets the connection info for the currently active SSMS query window.
         /// Returns null if no connection is available or if SSMS APIs cannot be accessed.

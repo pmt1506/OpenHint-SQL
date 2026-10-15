@@ -170,24 +170,26 @@ namespace OpenHintSQL.Settings
         }
 
         /// <summary>
-        /// Runs on a thread-pool thread. Serialises under the lock (so the dictionary
-        /// can't change mid-write) but does the file I/O outside it.
+        /// Runs on a thread-pool thread. Serialises under <see cref="Gate"/> (so the
+        /// dictionary can't change mid-write) but does the file I/O outside it, so
+        /// completion lookups never wait on the disk. <see cref="SaveGate"/> spans both
+        /// steps so overlapping saves can't write an older snapshot last.
         /// </summary>
         private static void SaveNow()
         {
             try
             {
-                string json;
-                lock (Gate)
-                {
-                    if (_store == null)
-                        return;
-
-                    json = JsonConvert.SerializeObject(_store, Formatting.Indented);
-                }
-
                 lock (SaveGate)
                 {
+                    string json;
+                    lock (Gate)
+                    {
+                        if (_store == null)
+                            return;
+
+                        json = JsonConvert.SerializeObject(_store, Formatting.Indented);
+                    }
+
                     Directory.CreateDirectory(SettingsDirectory);
                     File.WriteAllText(UsagePath, json);
                 }
