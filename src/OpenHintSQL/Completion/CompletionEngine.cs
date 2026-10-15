@@ -25,9 +25,11 @@ namespace OpenHintSQL.Completion
     internal static class CompletionEngine
     {
         /// <summary>
-        /// Maximum number of completion items returned to keep the popup responsive.
+        /// Maximum number of completion items returned. The popup list is virtualized,
+        /// so this only bounds how far a user can scroll an empty-prefix list
+        /// (e.g. right after FROM or EXEC) before having to type a filter.
         /// </summary>
-        private const int MaxResults = 50;
+        private const int MaxResults = 200;
         private const int MinFuzzyPrefixLength = 4;
         private const int MinDirectResultsBeforeFuzzy = 3;
 
@@ -64,7 +66,7 @@ namespace OpenHintSQL.Completion
                 var context = SqlContextParser.GetContext(fullText, caretOffset);
                 bool emptyPrefix = string.IsNullOrEmpty(prefix);
                 bool variablePrefix = !emptyPrefix && prefix[0] == '@';
-                bool inDotContext = SqlContextParser.GetTableContext(fullText, caretOffset) != null;
+                bool inDotContext = SqlContextParser.IsDotContext(fullText, caretOffset);
                 bool inUseDatabasePosition = context == SqlContext.UseDatabase &&
                     IsUseDatabasePosition(fullText, caretOffset);
 
@@ -103,7 +105,10 @@ namespace OpenHintSQL.Completion
 
                 if (variablePrefix || context == SqlContext.DeclareVariable || context == SqlContext.Exec)
                 {
-                    AddVariableMatches(results, prefix, completionScope.text, completionScope.caretOffset);
+                    // Variables are batch-scoped, so read the whole batch rather than the
+                    // current statement: a DECLARE ended by ';' or a procedure header
+                    // followed by statements must still supply its names.
+                    AddVariableMatches(results, prefix, fullText);
                 }
 
                 if (variablePrefix)
@@ -382,7 +387,7 @@ namespace OpenHintSQL.Completion
 
                 // Dot-context (alias-qualified) wins regardless of the surrounding clause:
                 // typing `c.` always means "columns of whatever c resolves to".
-                if (SqlContextParser.GetTableContext(scopeText, scopeCaretOffset) != null)
+                if (SqlContextParser.IsDotContext(scopeText, scopeCaretOffset))
                 {
                     AddColumns(results, schema, prefix, scopeText, scopeCaretOffset, context);
                     return;
@@ -594,27 +599,40 @@ namespace OpenHintSQL.Completion
             if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(prefix))
                 return false;
 
-            string normalizedName = NormalizeLooseIdentifier(name);
-            string normalizedPrefix = NormalizeLooseIdentifier(prefix);
-            if (string.IsNullOrEmpty(normalizedName) || string.IsNullOrEmpty(normalizedPrefix))
-                return false;
-
-            return normalizedName.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase);
+            return StartsWithIgnoringSeparators(name, prefix);
         }
 
-        private static string NormalizeLooseIdentifier(string value)
+        /// <summary>
+        /// Loose prefix test that ignores non-alphanumeric characters on both sides,
+        /// so "mabn" matches "MA_BN". Compares in place: this runs once per column in
+        /// the database on the typing path, so it must not allocate.
+        /// </summary>
+        private static bool StartsWithIgnoringSeparators(string name, string prefix)
         {
-            if (string.IsNullOrEmpty(value))
-                return string.Empty;
+            int n = 0;
+            bool prefixHasAlphanumeric = false;
 
-            var sb = new StringBuilder(value.Length);
-            foreach (char c in value)
+            for (int p = 0; p < prefix.Length; p++)
             {
-                if (char.IsLetterOrDigit(c))
-                    sb.Append(char.ToLowerInvariant(c));
+                char pc = prefix[p];
+                if (!char.IsLetterOrDigit(pc))
+                    continue;
+
+                prefixHasAlphanumeric = true;
+
+                while (n < name.Length && !char.IsLetterOrDigit(name[n]))
+                    n++;
+
+                if (n >= name.Length ||
+                    char.ToLowerInvariant(name[n]) != char.ToLowerInvariant(pc))
+                {
+                    return false;
+                }
+
+                n++;
             }
 
-            return sb.ToString();
+            return prefixHasAlphanumeric;
         }
 
         private static bool ContextNeedsSchema(SqlContext context)
@@ -1284,8 +1302,7 @@ namespace OpenHintSQL.Completion
             if (table == null)
                 return null;
 
-            var settings = SettingsProvider.GetSettings();
-            if (settings.OmitDboSchemaOnInsert)
+            if (SettingsProvider.OmitDboSchemaOnInsert)
                 return table.Name;
 
             return table.BracketedName;
@@ -1400,12 +1417,14 @@ namespace OpenHintSQL.Completion
                 }
                 else
                 {
-                    // Fallback: search all columns in the database (since database is small)
+                    // Fallback: search all columns in the database, building one item per
+                    // column name (duplicates are dropped by name when sorting anyway).
+                    var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var table in schema.Tables.Values)
                     {
                         foreach (var col in table.Columns)
                         {
-                            if (MatchesColumnPrefix(col.Name, prefix))
+                            if (MatchesColumnPrefix(col.Name, prefix) && emitted.Add(col.Name))
                             {
                                     results.Add(BuildColumnItem(col, table.FullName));
                                 }
@@ -1468,11 +1487,17 @@ namespace OpenHintSQL.Completion
             DatabaseSchema schema,
             string prefix)
         {
+            // Columns are stored in column_id order (the loader sorts by it), so no
+            // per-table re-sort is needed while scanning every column in the database.
+            // Only the first column per name is built: results are de-duplicated by
+            // name later anyway, and building one item per table for common names
+            // (tens of thousands on big databases) caused heavy allocation and GC.
+            var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var table in schema.Tables.Values)
             {
-                foreach (var col in table.Columns.OrderBy(c => c.OrdinalPosition))
+                foreach (var col in table.Columns)
                 {
-                    if (MatchesColumnPrefix(col.Name, prefix))
+                    if (MatchesColumnPrefix(col.Name, prefix) && emitted.Add(col.Name))
                     {
                         results.Add(BuildColumnItem(col, table.FullName));
                     }
@@ -1710,36 +1735,96 @@ namespace OpenHintSQL.Completion
             return true;
         }
 
+        /// <summary>
+        /// Start of the statement containing the caret: just after the nearest ';' or
+        /// GO separator line before it. Walks backward line by line and stops at the
+        /// first boundary, so the cost is the statement's size, not the script's.
+        /// </summary>
         private static int FindStatementStart(string text, int caretOffset)
         {
-            int start = 0;
+            int segmentEnd = caretOffset;
 
-            for (int i = 0; i < caretOffset; i++)
+            while (segmentEnd >= 0)
             {
-                if (text[i] == ';')
-                    start = i + 1;
+                int lineStart = segmentEnd;
+                while (lineStart > 0 && text[lineStart - 1] != '\n')
+                    lineStart--;
+
+                if (IsGoSeparatorLine(text, lineStart, segmentEnd))
+                    return segmentEnd;
+
+                for (int i = segmentEnd - 1; i >= lineStart; i--)
+                {
+                    if (text[i] == ';')
+                        return i + 1;
+                }
+
+                // Continue with the previous line, ending at its '\n'.
+                segmentEnd = lineStart - 1;
             }
 
-            var beforeCaret = text.Substring(0, caretOffset);
-            foreach (Match match in Regex.Matches(beforeCaret, @"(?im)^[ \t]*GO(?:[ \t]+--.*)?[ \t]*\r?$"))
-            {
-                start = Math.Max(start, match.Index + match.Length);
-            }
-
-            return start;
+            return 0;
         }
 
+        /// <summary>
+        /// End of the statement containing the caret: the next ';' or the start of the
+        /// next GO separator line, whichever comes first.
+        /// </summary>
         private static int FindStatementEnd(string text, int caretOffset)
         {
-            for (int i = caretOffset; i < text.Length; i++)
+            int segmentStart = caretOffset;
+
+            while (segmentStart < text.Length)
             {
-                if (text[i] == ';')
-                    return i;
+                int lineEnd = text.IndexOf('\n', segmentStart);
+                if (lineEnd < 0)
+                    lineEnd = text.Length;
+
+                if (IsGoSeparatorLine(text, segmentStart, lineEnd))
+                    return segmentStart;
+
+                for (int i = segmentStart; i < lineEnd; i++)
+                {
+                    if (text[i] == ';')
+                        return i;
+                }
+
+                segmentStart = lineEnd + 1;
             }
 
-            var afterCaret = text.Substring(caretOffset);
-            var goMatch = Regex.Match(afterCaret, @"(?im)^[ \t]*GO(?:[ \t]+--.*)?[ \t]*\r?$", RegexOptions.Multiline);
-            return goMatch.Success ? caretOffset + goMatch.Index : text.Length;
+            return text.Length;
+        }
+
+        /// <summary>
+        /// True when <c>text[start, end)</c> is a GO batch separator: "GO", optionally
+        /// followed by a repeat count and/or a -- comment, surrounded by blanks.
+        /// </summary>
+        private static bool IsGoSeparatorLine(string text, int start, int end)
+        {
+            int pos = start;
+            while (pos < end && (text[pos] == ' ' || text[pos] == '\t'))
+                pos++;
+
+            if (end - pos < 2 ||
+                char.ToUpperInvariant(text[pos]) != 'G' ||
+                char.ToUpperInvariant(text[pos + 1]) != 'O')
+            {
+                return false;
+            }
+
+            pos += 2;
+            if (pos < end && IsIdentifierChar(text[pos]))
+                return false;
+
+            while (pos < end && (text[pos] == ' ' || text[pos] == '\t'))
+                pos++;
+            while (pos < end && char.IsDigit(text[pos]))
+                pos++;
+            while (pos < end && (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\r'))
+                pos++;
+
+            return pos == end ||
+                   (pos + 1 < end && text[pos] == '-' && text[pos + 1] == '-');
         }
 
         private static int IndexOfTopLevelFrom(string text)
@@ -2172,39 +2257,31 @@ namespace OpenHintSQL.Completion
         {
             try
             {
-                var matches = schema.GetMatchingObjects(prefix);
-                if (matches != null)
+                // Same matching as tables: an empty prefix (right after EXEC) lists every
+                // procedure, and a typed fragment matches anywhere in the name, so
+                // "tiepnhan" finds dbo.sp_TT_TIEPNHAN_GET.
+                int directMatches = 0;
+                foreach (var proc in schema.Procedures.Values)
                 {
-                    foreach (var item in matches)
-                    {
-                        if (item.Kind == CompletionItemKind.Procedure || item.Kind == CompletionItemKind.Function)
-                        {
-                            results.Add(item);
-                        }
-                    }
+                    if (proc == null || !MatchesPrefix(proc.FullName, prefix))
+                        continue;
+
+                    results.Add(BuildProcedureItem(proc, priority: 20));
+                    directMatches++;
                 }
 
-                if (ShouldUseFuzzyFallback(prefix, results.Count))
+                if (ShouldUseFuzzyFallback(prefix, directMatches))
                 {
                     foreach (var proc in schema.Procedures.Values)
                     {
-                        if (!IsFuzzyProcedureMatch(proc, prefix))
-                            continue;
-
-                        var kind = proc.ObjectType != null && proc.ObjectType.Contains("FUNCTION")
-                            ? CompletionItemKind.Function
-                            : CompletionItemKind.Procedure;
-                        var label = kind == CompletionItemKind.Function ? "Function" : "Procedure";
-
-                        results.Add(new CompletionItemData
+                        if (proc == null ||
+                            MatchesPrefix(proc.FullName, prefix) ||
+                            !IsFuzzyProcedureMatch(proc, prefix))
                         {
-                            Text = proc.FullName,
-                            InsertText = proc.Name,
-                            Description = $"{label}: {proc.FullName}",
-                            Kind = kind,
-                            Priority = 1,
-                            IconKey = label
-                        });
+                            continue;
+                        }
+
+                        results.Add(BuildProcedureItem(proc, priority: 1));
                     }
                 }
             }
@@ -2214,6 +2291,24 @@ namespace OpenHintSQL.Completion
             }
         }
 
+        private static CompletionItemData BuildProcedureItem(ProcedureInfo proc, int priority)
+        {
+            var kind = proc.IsFunction ? CompletionItemKind.Function : CompletionItemKind.Procedure;
+            var label = kind == CompletionItemKind.Function ? "Function" : "Procedure";
+
+            return new CompletionItemData
+            {
+                Text = proc.FullName,
+                InsertText = proc.Name,
+                Description = proc.Parameters.Count > 0
+                    ? $"{label}: {proc.Signature}"
+                    : $"{label}: {proc.FullName}",
+                Kind = kind,
+                Priority = priority,
+                IconKey = label
+            };
+        }
+
         /// <summary>
         /// Adds variable and parameter suggestions for `@...` prefixes.
         /// Pulls from the current procedure header and local DECLARE statements.
@@ -2221,15 +2316,13 @@ namespace OpenHintSQL.Completion
         private static void AddVariableMatches(
             List<CompletionItemData> results,
             string prefix,
-            string fullText,
-            int caretOffset)
+            string batchText)
         {
             try
             {
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                string statementText = GetCurrentStatementScope(fullText, caretOffset).text;
 
-                foreach (var parameterName in GetCurrentProcedureParameterNames(statementText))
+                foreach (var parameterName in GetCurrentProcedureParameterNames(batchText))
                 {
                     if (!MatchesPrefix(parameterName, prefix) || !seen.Add(parameterName))
                         continue;
@@ -2240,7 +2333,7 @@ namespace OpenHintSQL.Completion
                         priority: 240));
                 }
 
-                foreach (var variableName in GetDeclaredVariableNames(statementText))
+                foreach (var variableName in GetDeclaredVariableNames(batchText))
                 {
                     if (!MatchesPrefix(variableName, prefix) || !seen.Add(variableName))
                         continue;
@@ -2271,41 +2364,63 @@ namespace OpenHintSQL.Completion
             };
         }
 
-        private static IEnumerable<string> GetCurrentProcedureParameterNames(string statementText)
+        private static readonly Regex ProcedureHeaderPattern = new Regex(
+            @"\b(?:CREATE|ALTER)\s+(?:OR\s+ALTER\s+)?(?:PROC(?:EDURE)?|FUNCTION)\b(?<header>[\s\S]*?)\bAS\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly Regex VariableNamePattern = new Regex(
+            @"@\w+",
+            RegexOptions.Compiled);
+
+        /// <summary>
+        /// A DECLARE statement runs until ';' or the next statement keyword, so
+        /// multi-line declarations (<c>DECLARE @a INT,\n @b INT</c>) and DECLAREs
+        /// that don't start a line (<c>BEGIN DECLARE @x INT</c>) are both covered.
+        /// </summary>
+        private static readonly Regex DeclareStatementPattern = new Regex(
+            @"\bDECLARE\b(?<decl>[\s\S]*?)(?=;|\b(?:SELECT|SET|IF|ELSE|WHILE|BEGIN|END|INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|RETURN|DECLARE|PRINT|WITH|OPEN|FETCH|CLOSE|DEALLOCATE|RAISERROR|THROW|TRUNCATE|CREATE|ALTER|DROP)\b|\z)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>
+        /// Declared names are the ones that start the declaration or follow a comma;
+        /// other @names inside a declaration are initial values (<c>= @other</c>).
+        /// </summary>
+        private static readonly Regex DeclaredNamePattern = new Regex(
+            @"(?:^|,)\s*(?<name>@\w+)",
+            RegexOptions.Compiled);
+
+        private static IEnumerable<string> GetCurrentProcedureParameterNames(string batchText)
         {
-            if (string.IsNullOrWhiteSpace(statementText))
+            if (string.IsNullOrWhiteSpace(batchText))
                 yield break;
 
-            var headerMatch = Regex.Match(
-                statementText,
-                @"(?is)\b(?:CREATE|ALTER)\s+(?:OR\s+ALTER\s+)?(?:PROC(?:EDURE)?|FUNCTION)\b(?<header>[\s\S]*?)\bAS\b");
+            var headerMatch = ProcedureHeaderPattern.Match(batchText);
             if (!headerMatch.Success)
                 yield break;
 
             var header = headerMatch.Groups["header"].Value;
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Match match in Regex.Matches(header, @"@\w+"))
+            foreach (Match match in VariableNamePattern.Matches(header))
             {
                 if (seen.Add(match.Value))
                     yield return match.Value;
             }
         }
 
-        private static IEnumerable<string> GetDeclaredVariableNames(string statementText)
+        private static IEnumerable<string> GetDeclaredVariableNames(string batchText)
         {
-            if (string.IsNullOrWhiteSpace(statementText))
+            if (string.IsNullOrWhiteSpace(batchText))
                 yield break;
 
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Match declareMatch in Regex.Matches(
-                statementText,
-                @"(?im)^\s*DECLARE\b(?<decl>[^\r\n;]*)"))
+            foreach (Match declareMatch in DeclareStatementPattern.Matches(batchText))
             {
                 var declaration = declareMatch.Groups["decl"].Value;
-                foreach (Match variableMatch in Regex.Matches(declaration, @"@\w+"))
+                foreach (Match variableMatch in DeclaredNamePattern.Matches(declaration))
                 {
-                    if (seen.Add(variableMatch.Value))
-                        yield return variableMatch.Value;
+                    string name = variableMatch.Groups["name"].Value;
+                    if (seen.Add(name))
+                        yield return name;
                 }
             }
         }
@@ -2367,9 +2482,13 @@ namespace OpenHintSQL.Completion
             }
         }
 
+        /// <summary>
+        /// Right-to-left so only the nearest keyword before the caret is examined,
+        /// instead of enumerating every FROM/JOIN/UPDATE in the batch.
+        /// </summary>
         private static readonly Regex ObjectPositionKeywordPattern = new Regex(
             @"\b(?:FROM|JOIN|APPLY|UPDATE|INSERT\s+INTO)\b",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.RightToLeft);
 
         private static bool IsAtObjectNamePosition(string fullText, int caretOffset, string prefix)
         {
@@ -2378,21 +2497,22 @@ namespace OpenHintSQL.Completion
 
             int prefixLength = string.IsNullOrEmpty(prefix) ? 0 : prefix.Length;
             int limit = Math.Min(Math.Max(caretOffset - prefixLength, 0), fullText.Length);
-            string beforePrefix = fullText.Substring(0, limit);
 
-            var matches = ObjectPositionKeywordPattern.Matches(beforePrefix);
-            if (matches.Count == 0)
+            var keyword = ObjectPositionKeywordPattern.Match(fullText, 0, limit);
+            if (!keyword.Success)
                 return true;
 
-            var keyword = matches[matches.Count - 1];
-            string afterKeyword = beforePrefix.Substring(keyword.Index + keyword.Length);
-            string trimmed = afterKeyword.TrimEnd();
+            // Last non-blank character between the keyword and the typed prefix.
+            int afterKeyword = keyword.Index + keyword.Length;
+            int last = limit - 1;
+            while (last >= afterKeyword && char.IsWhiteSpace(fullText[last]))
+                last--;
 
-            if (trimmed.Length == 0)
+            if (last < afterKeyword)
                 return true;
 
-            char last = trimmed[trimmed.Length - 1];
-            return last == ',' || last == '.' || last == '[';
+            char lastChar = fullText[last];
+            return lastChar == ',' || lastChar == '.' || lastChar == '[';
         }
 
         /// <summary>
@@ -2407,32 +2527,11 @@ namespace OpenHintSQL.Completion
             if (string.IsNullOrEmpty(prefix))
                 return true;
 
-            // Direct prefix match (case-insensitive)
-            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            // Check the part after the dot for schema-qualified names (e.g., dbo.TableName)
-            int dotIndex = name.LastIndexOf('.');
-            if (dotIndex >= 0 && dotIndex < name.Length - 1)
-            {
-                string unqualified = name.Substring(dotIndex + 1);
-                if (unqualified.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-
-            // Token-aware match for names like dbo.TT_TIEPNHAN or [dbo].[TT_TIEPNHAN].
-            // This lets users search by the meaningful part without typing technical prefixes.
-            foreach (var term in GetSearchTerms(name))
-            {
-                if (term.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-
-            // Substring match for flexibility
-            if (name.IndexOf(prefix, StringComparison.OrdinalIgnoreCase) >= 0)
-                return true;
-
-            return false;
+            // A plain case-insensitive substring test. Whole-name prefixes, the part
+            // after the schema dot and token prefixes (TT_TIEPNHAN → "tiep") are all
+            // substrings of the name, so this single check covers every one of them
+            // without splitting names into temporary strings on each keystroke.
+            return name.IndexOf(prefix, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static bool ShouldUseFuzzyFallback(string prefix, int directResultsCount)
@@ -2597,55 +2696,62 @@ namespace OpenHintSQL.Completion
             if (item == null || string.IsNullOrEmpty(prefix))
                 return 0;
 
-            var candidates = new[]
-            {
-                item.Text,
-                item.InsertText,
-                ExtractObjectName(item.Text),
-                ExtractObjectName(item.InsertText)
-            };
+            // Best relevance over the visible text, the insert text and the bare object
+            // names inside them (exact = 4, starts-with = 3, contains = 1).
+            int relevance = GetCandidateRelevance(item.Text, prefix);
+            if (relevance == 4)
+                return relevance;
 
-            foreach (var candidate in candidates)
-            {
-                if (string.Equals(candidate, prefix, StringComparison.OrdinalIgnoreCase))
-                    return 4;
-            }
+            relevance = Math.Max(relevance, GetCandidateRelevance(item.InsertText, prefix));
+            if (relevance == 4)
+                return relevance;
 
-            foreach (var candidate in candidates)
-            {
-                if (!string.IsNullOrEmpty(candidate) &&
-                    candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    return 3;
-                }
-            }
+            relevance = Math.Max(relevance, GetCandidateRelevance(ExtractObjectName(item.Text), prefix));
+            if (relevance == 4)
+                return relevance;
 
-            foreach (var candidate in candidates)
-            {
-                if (!string.IsNullOrEmpty(candidate) &&
-                    candidate.IndexOf(prefix, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    return 1;
-                }
-            }
+            return Math.Max(relevance, GetCandidateRelevance(ExtractObjectName(item.InsertText), prefix));
+        }
 
+        private static int GetCandidateRelevance(string candidate, string prefix)
+        {
+            if (string.IsNullOrEmpty(candidate))
+                return 0;
+            if (string.Equals(candidate, prefix, StringComparison.OrdinalIgnoreCase))
+                return 4;
+            if (candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return 3;
+            if (candidate.IndexOf(prefix, StringComparison.OrdinalIgnoreCase) >= 0)
+                return 1;
             return 0;
         }
 
+        /// <summary>
+        /// Extracts the bare object name from display/insert text such as
+        /// "[dbo].[Users] u" → "Users". Called for every candidate while sorting,
+        /// so it locates the token by index instead of trimming and splitting.
+        /// </summary>
         private static string ExtractObjectName(string text)
         {
             if (string.IsNullOrWhiteSpace(text))
                 return text;
 
-            var firstToken = text.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, 2)[0];
-            var lastDot = firstToken.LastIndexOf('.');
-            if (lastDot >= 0 && lastDot < firstToken.Length - 1)
-                firstToken = firstToken.Substring(lastDot + 1);
+            int start = 0;
+            while (start < text.Length && char.IsWhiteSpace(text[start]))
+                start++;
 
-            if (firstToken.Length >= 2 && firstToken[0] == '[' && firstToken[firstToken.Length - 1] == ']')
-                firstToken = firstToken.Substring(1, firstToken.Length - 2).Replace("]]", "]");
+            int end = start;
+            while (end < text.Length && !char.IsWhiteSpace(text[end]))
+                end++;
 
-            return firstToken;
+            int lastDot = text.LastIndexOf('.', end - 1, end - start);
+            if (lastDot >= 0 && lastDot < end - 1)
+                start = lastDot + 1;
+
+            if (end - start >= 2 && text[start] == '[' && text[end - 1] == ']')
+                return text.Substring(start + 1, end - start - 2).Replace("]]", "]");
+
+            return start == 0 && end == text.Length ? text : text.Substring(start, end - start);
         }
     }
 }

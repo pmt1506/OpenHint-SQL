@@ -22,6 +22,24 @@ namespace OpenHintSQL.Settings
             }
         }
 
+        /// <summary>
+        /// Cheap read of a single flag for hot paths (one call per suggested table);
+        /// <see cref="GetSettings"/> clones the whole settings object, snippets included.
+        /// </summary>
+        public static bool OmitDboSchemaOnInsert
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    if (_settings == null)
+                        _settings = LoadSettings();
+
+                    return _settings.OmitDboSchemaOnInsert;
+                }
+            }
+        }
+
         public static void SaveSettings(OpenHintSqlSettings settings)
         {
             lock (Gate)

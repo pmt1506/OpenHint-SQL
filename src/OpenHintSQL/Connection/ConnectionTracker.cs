@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Data;
 using System.Data.SqlClient;
 using System.Reflection;
@@ -29,6 +30,20 @@ namespace OpenHintSQL.Connection
     /// </summary>
     internal static class ConnectionTracker
     {
+        private static readonly TimeSpan TypeMissRetryInterval = TimeSpan.FromSeconds(30);
+
+        private static readonly ConcurrentDictionary<string, TypeLookup> TypeLookups =
+            new ConcurrentDictionary<string, TypeLookup>(StringComparer.Ordinal);
+
+        private static readonly ConcurrentDictionary<Type, object> ResolvedServices =
+            new ConcurrentDictionary<Type, object>();
+
+        private sealed class TypeLookup
+        {
+            public Type Type;
+            public DateTime CheckedAtUtc;
+        }
+
         /// <summary>
         /// Gets the connection info for the currently active SSMS query window.
         /// Returns null if no connection is available or if SSMS APIs cannot be accessed.
@@ -85,7 +100,7 @@ namespace OpenHintSQL.Connection
                 "Microsoft.SqlServer.Management.UI.VSIntegration.SSqlEditorService");
             if (serviceType == null)
             {
-                Logger.Log("SSqlEditorService not available; using legacy connection lookup");
+                Logger.Diagnostic("SSqlEditorService not available; using legacy connection lookup");
                 return null;
             }
 
@@ -119,7 +134,7 @@ namespace OpenHintSQL.Connection
             var info = BuildConnectionInfo(dbConnection, uiConnInfo);
             if (info != null)
             {
-                Logger.Log("Connection obtained (SqlEditorService)");
+                Logger.Diagnostic("Connection obtained (SqlEditorService)");
                 return info;
             }
 
@@ -193,7 +208,7 @@ namespace OpenHintSQL.Connection
             var info = BuildConnectionInfo(null, uiConnInfo);
             if (info != null)
             {
-                Logger.Log("Connection obtained (reflection)");
+                Logger.Diagnostic("Connection obtained (reflection)");
                 return info;
             }
 
@@ -394,6 +409,20 @@ namespace OpenHintSQL.Connection
 
         private static object ResolveVisualStudioService(Type serviceType, Type interfaceType)
         {
+            // Shell services are process-wide singletons; resolving them walks several
+            // service providers, so remember the first non-null answer.
+            if (ResolvedServices.TryGetValue(serviceType, out var cached))
+                return cached;
+
+            var service = ResolveVisualStudioServiceUncached(serviceType, interfaceType);
+            if (service != null)
+                ResolvedServices[serviceType] = service;
+
+            return service;
+        }
+
+        private static object ResolveVisualStudioServiceUncached(Type serviceType, Type interfaceType)
+        {
             var package = OpenHintSQLPackage.Instance;
 
             object service = null;
@@ -533,7 +562,26 @@ namespace OpenHintSQL.Connection
             return null;
         }
 
+        /// <summary>
+        /// Finds a type among the assemblies already loaded in SSMS. Scanning every
+        /// loaded assembly is expensive and this runs on the typing path, so found
+        /// types are cached for the process lifetime. A miss is cached briefly too:
+        /// the SSMS assembly that defines the type may simply not be loaded yet.
+        /// </summary>
         private static Type FindLoadedType(string fullTypeName)
+        {
+            if (TypeLookups.TryGetValue(fullTypeName, out var cached) &&
+                (cached.Type != null || DateTime.UtcNow - cached.CheckedAtUtc < TypeMissRetryInterval))
+            {
+                return cached.Type;
+            }
+
+            var type = ScanLoadedAssembliesForType(fullTypeName);
+            TypeLookups[fullTypeName] = new TypeLookup { Type = type, CheckedAtUtc = DateTime.UtcNow };
+            return type;
+        }
+
+        private static Type ScanLoadedAssembliesForType(string fullTypeName)
         {
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {

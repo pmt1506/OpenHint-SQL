@@ -219,18 +219,15 @@ namespace OpenHintSQL.Context
 
             int limit = Math.Min(caretOffset, text.Length);
 
-            // Take the portion of text before the caret, normalise whitespace for
-            // easier keyword matching, but preserve parenthesis depth so we can
-            // ignore subqueries.
-            string before = text.Substring(0, limit);
-
             // Walk backward through the text tracking parenthesis nesting depth.
             // We only care about keywords at the *current* nesting level (depth 0).
+            // The scan reads the original string in place: copying the text before
+            // the caret on every keystroke is costly for large scripts.
             int parenDepth = 0;
 
-            for (int pos = before.Length - 1; pos >= 0; pos--)
+            for (int pos = limit - 1; pos >= 0; pos--)
             {
-                char c = before[pos];
+                char c = text[pos];
 
                 if (c == ')')
                 {
@@ -254,7 +251,7 @@ namespace OpenHintSQL.Context
                 // Try to match each clause keyword at this position
                 foreach (var (keyword, context) in ClauseKeywords)
                 {
-                    if (MatchKeywordBackward(before, pos, keyword))
+                    if (MatchKeywordBackward(text, pos, keyword, limit))
                         return context;
                 }
             }
@@ -322,17 +319,49 @@ namespace OpenHintSQL.Context
         /// <param name="caretOffset">Zero-based caret position within the text.</param>
         public static TableContextResult GetTableContext(string text, int caretOffset)
         {
+            string alias = GetQualifierBeforeCaret(text, caretOffset);
+            if (alias == null)
+                return null;
+
+            // Attempt to resolve the alias by scanning FROM / JOIN clauses
+            int limit = Math.Min(caretOffset, text.Length);
+            var resolved = ResolveAlias(text, limit, alias);
+
+            return new TableContextResult
+            {
+                AliasOrTable = alias,
+                ResolvedTable = resolved.tableName,
+                SchemaName = resolved.schemaName
+            };
+        }
+
+        /// <summary>
+        /// True when the caret sits after a qualifier and a dot (e.g. "u." or "u.Na").
+        /// Same answer as <c>GetTableContext(...) != null</c>, but skips the alias
+        /// resolution scan, so it is cheap enough to call on every keystroke.
+        /// </summary>
+        public static bool IsDotContext(string text, int caretOffset)
+            => GetQualifierBeforeCaret(text, caretOffset) != null;
+
+        // ──────────────────────────────────────────────
+        //  Private helpers
+        // ──────────────────────────────────────────────
+
+        /// <summary>
+        /// Returns the alias/table qualifier in front of the dot that precedes the
+        /// caret (or the partially typed word after it), or null when there is none.
+        /// </summary>
+        private static string GetQualifierBeforeCaret(string text, int caretOffset)
+        {
             if (string.IsNullOrEmpty(text) || caretOffset < 2)
                 return null;
 
             int limit = Math.Min(caretOffset, text.Length);
 
             // The character immediately before the caret (or before the word being
-            // typed) should be a dot.
+            // typed) should be a dot. If the user is mid-word after a dot
+            // (e.g. "u.Na|"), walk back past the partial word to find it.
             int dotPos = -1;
-
-            // If the user is mid-word after a dot (e.g. "u.Na|"), walk back past the
-            // partial word to find the dot.
             int scanPos = limit - 1;
             while (scanPos >= 0 && IsWordChar(text[scanPos]))
                 scanPos--;
@@ -351,50 +380,34 @@ namespace OpenHintSQL.Context
             while (aliasStart > 0 && IsWordChar(text[aliasStart - 1]))
                 aliasStart--;
 
-            if (aliasStart >= aliasEnd)
-                return null;
-
             // Handle bracket-delimited identifiers: [schema].table
-            if (aliasStart > 0 && aliasEnd > 0)
+            if (aliasStart > 0 && text[dotPos - 1] == ']')
             {
                 int bracketEnd = dotPos - 1;
-                if (bracketEnd >= 0 && text[bracketEnd] == ']')
+                int bracketStart = text.LastIndexOf('[', bracketEnd);
+                if (bracketStart >= 0)
                 {
-                    int bracketStart = text.LastIndexOf('[', bracketEnd);
-                    if (bracketStart >= 0)
-                    {
-                        aliasStart = bracketStart + 1;
-                        aliasEnd = bracketEnd;
-                    }
+                    aliasStart = bracketStart + 1;
+                    aliasEnd = bracketEnd;
                 }
             }
 
             string alias = text.Substring(aliasStart, aliasEnd - aliasStart).Trim();
-            if (string.IsNullOrEmpty(alias))
-                return null;
-
-            // Attempt to resolve the alias by scanning FROM / JOIN clauses
-            var resolved = ResolveAlias(text, limit, alias);
-
-            return new TableContextResult
-            {
-                AliasOrTable = alias,
-                ResolvedTable = resolved.tableName,
-                SchemaName = resolved.schemaName
-            };
+            return string.IsNullOrEmpty(alias) ? null : alias;
         }
-
-        // ──────────────────────────────────────────────
-        //  Private helpers
-        // ──────────────────────────────────────────────
 
         /// <summary>
         /// Tests whether the keyword ends at position <paramref name="endPos"/>
         /// (inclusive) in <paramref name="text"/>, with word boundaries on both sides.
-        /// Comparison is case-insensitive.
+        /// Comparison is case-insensitive. <paramref name="textEnd"/> bounds the text
+        /// (exclusive), so callers can treat the caret as the end of the input
+        /// without copying the prefix out of the full string.
         /// </summary>
-        private static bool MatchKeywordBackward(string text, int endPos, string keyword)
+        private static bool MatchKeywordBackward(string text, int endPos, string keyword, int textEnd = -1)
         {
+            if (textEnd < 0 || textEnd > text.Length)
+                textEnd = text.Length;
+
             int kwLen = keyword.Length;
             int startPos = endPos - kwLen + 1;
 
@@ -406,7 +419,7 @@ namespace OpenHintSQL.Context
                 return false;
 
             // Word boundary after the keyword
-            if (endPos + 1 < text.Length && IsWordChar(text[endPos + 1]))
+            if (endPos + 1 < textEnd && IsWordChar(text[endPos + 1]))
                 return false;
 
             // Case-insensitive compare
@@ -450,8 +463,10 @@ namespace OpenHintSQL.Context
         private static (string tableName, string schemaName) ResolveAlias(
             string text, int limit, string alias)
         {
-            string searchText = text.Substring(0, limit);
-            var matches = TableRefPattern.Matches(searchText);
+            // Search only the text before the caret, in place (no prefix copy).
+            var matches = new List<Match>();
+            for (var match = TableRefPattern.Match(text, 0, limit); match.Success; match = match.NextMatch())
+                matches.Add(match);
 
             // Walk matches in reverse so the closest (most relevant) definition wins
             for (int i = matches.Count - 1; i >= 0; i--)

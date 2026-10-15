@@ -7,11 +7,24 @@ namespace OpenHintSQL.Schema
     /// </summary>
     public class TableInfo
     {
+        private string _schemaName;
+        private string _name;
+        private string _fullName;
+        private string _bracketedName;
+
         /// <summary>Schema name (e.g. dbo, Sales).</summary>
-        public string SchemaName { get; set; }
+        public string SchemaName
+        {
+            get => _schemaName;
+            set { _schemaName = value; ResetDerivedNames(); }
+        }
 
         /// <summary>Object name (e.g. Customers, OrdersView).</summary>
-        public string Name { get; set; }
+        public string Name
+        {
+            get => _name;
+            set { _name = value; ResetDerivedNames(); }
+        }
 
         /// <summary>Object type: "TABLE" or "VIEW".</summary>
         public string ObjectType { get; set; }
@@ -34,11 +47,21 @@ namespace OpenHintSQL.Schema
         /// <summary>FK constraints from other tables that reference this table (this table is the referenced side).</summary>
         public List<ForeignKeyInfo> IncomingForeignKeys { get; set; } = new List<ForeignKeyInfo>();
 
+        // Both names are read for every table on every completion keystroke, so they
+        // are built once and reset only when SchemaName or Name changes.
+
         /// <summary>Schema-qualified name (e.g. dbo.Customers).</summary>
-        public string FullName => $"{SchemaName}.{Name}";
+        public string FullName => _fullName ?? (_fullName = $"{SchemaName}.{Name}");
 
         /// <summary>Bracket-escaped full name (e.g. [dbo].[Customers]).</summary>
-        public string BracketedName => $"{QuoteIdentifier(SchemaName)}.{QuoteIdentifier(Name)}";
+        public string BracketedName =>
+            _bracketedName ?? (_bracketedName = $"{QuoteIdentifier(SchemaName)}.{QuoteIdentifier(Name)}");
+
+        private void ResetDerivedNames()
+        {
+            _fullName = null;
+            _bracketedName = null;
+        }
 
         private static string QuoteIdentifier(string identifier)
         {

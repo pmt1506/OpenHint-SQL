@@ -94,7 +94,6 @@ namespace OpenHintSQL.UI
 
         private List<CompletionItemData> _allItems;
         private List<CompletionItemData> _filteredItems;
-        private string _currentPrefix;
         private IWpfTextView _currentView;
 
         /// <summary>
@@ -111,38 +110,6 @@ namespace OpenHintSQL.UI
             {
                 try { return _popup.IsOpen; }
                 catch { return false; }
-            }
-        }
-
-        /// <summary>
-        /// Gets whether the popup currently has any items to display.
-        /// </summary>
-        public bool HasItems
-        {
-            get
-            {
-                try { return _filteredItems != null && _filteredItems.Count > 0; }
-                catch { return false; }
-            }
-        }
-
-        /// <summary>
-        /// Gets whether the popup is currently displaying a non-insertable status row
-        /// such as schema-loading feedback.
-        /// </summary>
-        public bool IsShowingStatus
-        {
-            get
-            {
-                try
-                {
-                    return _filteredItems != null &&
-                           _filteredItems.Any(item => item.Kind == CompletionItemKind.Status);
-                }
-                catch
-                {
-                    return false;
-                }
             }
         }
 
@@ -322,22 +289,33 @@ namespace OpenHintSQL.UI
             {
                 try
                 {
+                    // The popup is refreshed in place on every keystroke while it is open;
+                    // only a fresh open gets the fade-in, otherwise typing would flicker.
+                    bool alreadyOpen = _popup.IsOpen;
+
                     _currentView = view;
                     _allItems = items ?? new List<CompletionItemData>();
                     _filteredItems = new List<CompletionItemData>(_allItems);
-                    _currentPrefix = string.Empty;
 
                     _listBox.ItemsSource = _filteredItems;
-                    Logger.Log($"CompletionPopup.Show with {_filteredItems.Count} item(s)");
+                    Logger.Diagnostic($"CompletionPopup.Show with {_filteredItems.Count} item(s)");
 
                     if (_filteredItems.Count > 0)
                     {
                         _listBox.SelectedIndex = 0;
+                        if (alreadyOpen)
+                            _listBox.ScrollIntoView(_listBox.SelectedItem);
                     }
 
                     ResetHorizontalScroll();
                     PositionAtCaret();
                     UpdateDetailPopupForSelection();
+
+                    if (alreadyOpen)
+                    {
+                        QueueResetHorizontalScroll();
+                        return;
+                    }
 
                     // Show with fade-in animation
                     _border.Opacity = 0;
@@ -459,61 +437,6 @@ namespace OpenHintSQL.UI
                 Dismiss();
                 return null;
             }
-        }
-
-        /// <summary>
-        /// Updates the displayed items by filtering the original list with a new prefix.
-        /// Preserves the popup position and keeps the best match selected.
-        /// </summary>
-        /// <param name="prefix">The new prefix to filter by.</param>
-        public void UpdateFilter(string prefix)
-        {
-            EnsureUIThread(() =>
-            {
-                try
-                {
-                    PositionAtCaret();
-
-                    if (string.IsNullOrEmpty(prefix))
-                    {
-                        _filteredItems = new List<CompletionItemData>(_allItems);
-                    }
-                    else
-                    {
-                        _currentPrefix = prefix;
-                        _filteredItems = _allItems
-                            .Where(item => MatchesFilter(item.Text, prefix))
-                            .ToList();
-                    }
-
-                    _listBox.ItemsSource = _filteredItems;
-
-                    if (_filteredItems.Count > 0)
-                    {
-                        // Select the best match (prefer prefix match over substring match)
-                        var bestMatch = _filteredItems.FirstOrDefault(item =>
-                            item.Text != null &&
-                            item.Text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
-
-                    _listBox.SelectedItem = bestMatch ?? _filteredItems[0];
-                    _listBox.ScrollIntoView(_listBox.SelectedItem);
-                    ResetHorizontalScroll();
-                    QueueResetHorizontalScroll();
-                    UpdateDetailPopupForSelection();
-                }
-
-                // If no items match, hide the popup
-                if (_filteredItems.Count == 0)
-                {
-                    _popup.IsOpen = false;
-                    _detailPopup.IsOpen = false;
-                }
-                }
-                catch (Exception ex)
-                {
-                    Logger.Error("UpdateFilter failed", ex);
-                }
-            });
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -762,25 +685,6 @@ namespace OpenHintSQL.UI
         // ═══════════════════════════════════════════════════════════════
         //  HELPERS
         // ═══════════════════════════════════════════════════════════════
-
-        /// <summary>
-        /// Checks if a completion item text matches the given filter prefix (case-insensitive).
-        /// </summary>
-        private static bool MatchesFilter(string text, string prefix)
-        {
-            if (string.IsNullOrEmpty(text))
-                return false;
-
-            // Prefix match
-            if (text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            // Substring match
-            if (text.IndexOf(prefix, StringComparison.OrdinalIgnoreCase) >= 0)
-                return true;
-
-            return false;
-        }
 
         /// <summary>
         /// Anchors the popup to the editor visual at the current caret position.

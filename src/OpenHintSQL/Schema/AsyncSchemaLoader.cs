@@ -48,7 +48,7 @@ SELECT
 FROM sys.objects o
 INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
 WHERE o.is_ms_shipped = 0
-  AND o.type IN ('P', 'FN', 'IF', 'TF')
+  AND o.type IN ('P', 'PC', 'FN', 'IF', 'TF', 'FS', 'FT')
 ORDER BY s.name, o.name;
 
 -- Result 3: Procedure/function parameters
@@ -64,7 +64,7 @@ INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
 INNER JOIN sys.parameters p ON o.object_id = p.object_id
 INNER JOIN sys.types tp ON p.user_type_id = tp.user_type_id
 WHERE o.is_ms_shipped = 0
-  AND o.type IN ('P', 'FN', 'IF', 'TF')
+  AND o.type IN ('P', 'PC', 'FN', 'IF', 'TF', 'FS', 'FT')
 ORDER BY s.name, o.name, p.parameter_id;
 
 -- Result 4: Primary-key columns
@@ -124,7 +124,10 @@ ORDER BY fk.name, fkc.constraint_column_id;
 
                     using (var command = new SqlCommand(SchemaQuery, connection))
                     {
-                        command.CommandTimeout = 30;
+                        // Catalog views on databases with tens of thousands of columns, or on a
+                        // busy server, can take well over 30s; timing out leaves completion
+                        // with no schema at all, so allow the load more time.
+                        command.CommandTimeout = 120;
 
                         using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
                         {

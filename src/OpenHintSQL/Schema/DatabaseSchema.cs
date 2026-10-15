@@ -27,7 +27,7 @@ namespace OpenHintSQL.Schema
     /// <summary>
     /// In-memory container for a database's schema: tables, views, procedures, and functions.
     /// After populating the dictionaries, call <see cref="Build"/> to construct
-    /// the sorted name lists and trie index for fast prefix search.
+    /// the sorted name lists and resolve primary/foreign keys.
     /// </summary>
     internal class DatabaseSchema
     {
@@ -78,11 +78,6 @@ namespace OpenHintSQL.Schema
         public string LoadError { get; set; }
 
         /// <summary>
-        /// Trie index for fast prefix search across all object names (tables, views, procs).
-        /// </summary>
-        private readonly TrieIndex<CompletionItemData> _trieIndex = new TrieIndex<CompletionItemData>();
-
-        /// <summary>
         /// Raw FK rows populated by <see cref="AsyncSchemaLoader"/> before <see cref="Build"/> resolves them
         /// into <see cref="ForeignKeyInfo"/> object refs on the appropriate <see cref="TableInfo"/>.
         /// </summary>
@@ -100,7 +95,7 @@ namespace OpenHintSQL.Schema
         }
 
         /// <summary>
-        /// Builds the sorted name lists and trie index from the populated dictionaries.
+        /// Builds the sorted name lists and key metadata from the populated dictionaries.
         /// Must be called after all tables, views, and procedures have been added — and
         /// after deserialising from disk, since none of the derived state is persisted.
         /// </summary>
@@ -131,67 +126,11 @@ namespace OpenHintSQL.Schema
                 table.IncomingForeignKeys.Clear();
             }
 
-            // Build trie index from all objects
-            _trieIndex.Clear();
-
-            foreach (var kvp in Tables)
-            {
-                var t = kvp.Value;
-                var item = new CompletionItemData
-                {
-                    Text = t.FullName,
-                    InsertText = t.BracketedName,
-                    Description = $"Table: {t.BracketedName}",
-                    Kind = CompletionItemKind.Table,
-                    Priority = 10,
-                    IconKey = "Table"
-                };
-                // Index by full name and by short name for flexible matching
-                _trieIndex.Insert(t.FullName, item);
-                _trieIndex.Insert(t.Name, item);
-            }
-
-            foreach (var kvp in Views)
-            {
-                var v = kvp.Value;
-                var item = new CompletionItemData
-                {
-                    Text = v.FullName,
-                    InsertText = v.BracketedName,
-                    Description = $"View: {v.BracketedName}",
-                    Kind = CompletionItemKind.View,
-                    Priority = 15,
-                    IconKey = "View"
-                };
-                _trieIndex.Insert(v.FullName, item);
-                _trieIndex.Insert(v.Name, item);
-            }
-
-            foreach (var kvp in Procedures)
-            {
-                var p = kvp.Value;
-                var kind = p.ObjectType != null && p.ObjectType.Contains("FUNCTION")
-                    ? CompletionItemKind.Function
-                    : CompletionItemKind.Procedure;
-                var label = kind == CompletionItemKind.Function ? "Function" : "Procedure";
-
-                var item = new CompletionItemData
-                {
-                    Text = p.FullName,
-                    InsertText = p.Name,
-                    Description = p.Parameters.Count > 0
-                        ? $"{label}: {p.Signature}"
-                        : $"{label}: {p.FullName}",
-                    Kind = kind,
-                    Priority = 20,
-                    IconKey = label
-                };
-                _trieIndex.Insert(p.FullName, item);
-                _trieIndex.Insert(p.Name, item);
-            }
+            // No per-character search index is built here: completion matches names with
+            // substring scans, and a trie over every object name cost tens of MB that
+            // was rebuilt (and garbage-collected) on every schema refresh.
 
             // Resolve pending FK rows into ForeignKeyInfo refs on the appropriate tables.
-            // Rows arrive in (fk_name, constraint_column_id) order; group consecutive rows by name.
             ResolveForeignKeys();
         }
 
@@ -201,30 +140,31 @@ namespace OpenHintSQL.Schema
         /// </summary>
         private void ResolveForeignKeys()
         {
-            ForeignKeyInfo current = null;
-            string currentName = null;
-            int resolved = 0, skipped = 0;
+            // Constraint names are only unique per schema, so two FKs can share a name
+            // (and their rows interleave in name order). Group by name + parent table
+            // instead of by consecutive name, or such FKs get merged into one bogus key.
+            var byConstraint = new Dictionary<string, ForeignKeyInfo>(StringComparer.OrdinalIgnoreCase);
+            var ordered = new List<ForeignKeyInfo>();
+            var unresolved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var row in PendingForeignKeys)
             {
-                if (row.Name != currentName)
-                {
-                    // Commit the previous FK (if any) and start a new one.
-                    if (current != null)
-                        AttachForeignKey(current);
+                string constraintKey = $"{row.ParentSchema}.{row.ParentTable}|{row.Name}";
+                if (unresolved.Contains(constraintKey))
+                    continue;
 
-                    currentName = row.Name;
+                if (!byConstraint.TryGetValue(constraintKey, out var current))
+                {
                     current = StartForeignKey(row);
                     if (current == null)
                     {
-                        skipped++;
+                        unresolved.Add(constraintKey);
                         continue;
                     }
-                    resolved++;
-                }
 
-                if (current == null)
-                    continue;
+                    byConstraint[constraintKey] = current;
+                    ordered.Add(current);
+                }
 
                 var parentCol = FindColumn(current.ParentTable, row.ParentColumn);
                 var refCol = FindColumn(current.ReferencedTable, row.ReferencedColumn);
@@ -235,11 +175,11 @@ namespace OpenHintSQL.Schema
                 }
             }
 
-            if (current != null)
-                AttachForeignKey(current);
+            foreach (var fk in ordered)
+                AttachForeignKey(fk);
 
-            if (skipped > 0)
-                Logger.Warn($"Skipped {skipped} FKs that could not be resolved to known tables");
+            if (unresolved.Count > 0)
+                Logger.Warn($"Skipped {unresolved.Count} FKs that could not be resolved to known tables");
 
             // NOTE: PendingForeignKeys is intentionally NOT cleared — it's the only
             // string-keyed FK snapshot that survives JSON persistence. Build() re-runs
@@ -300,20 +240,6 @@ namespace OpenHintSQL.Schema
                 if (ReferenceEquals(fk.ParentTable, b))
                     yield return fk;
             }
-        }
-
-        /// <summary>
-        /// Returns completion items for all objects whose names start with the given prefix.
-        /// Searches across tables, views, and procedures/functions via the trie index.
-        /// </summary>
-        /// <param name="prefix">The prefix to match (case-insensitive).</param>
-        /// <returns>List of matching <see cref="CompletionItemData"/> items.</returns>
-        public List<CompletionItemData> GetMatchingObjects(string prefix)
-        {
-            if (string.IsNullOrEmpty(prefix) || !IsLoaded)
-                return new List<CompletionItemData>();
-
-            return _trieIndex.Search(prefix);
         }
 
         /// <summary>

@@ -8,11 +8,23 @@ namespace OpenHintSQL.Schema
     /// </summary>
     public class ProcedureInfo
     {
+        private string _schemaName;
+        private string _name;
+        private string _fullName;
+
         /// <summary>Schema name (e.g. dbo).</summary>
-        public string SchemaName { get; set; }
+        public string SchemaName
+        {
+            get => _schemaName;
+            set { _schemaName = value; _fullName = null; }
+        }
 
         /// <summary>Object name (e.g. usp_GetCustomers).</summary>
-        public string Name { get; set; }
+        public string Name
+        {
+            get => _name;
+            set { _name = value; _fullName = null; }
+        }
 
         /// <summary>Object type description: "PROCEDURE", "FUNCTION", "INLINE_TABLE_VALUED_FUNCTION", etc.</summary>
         public string ObjectType { get; set; }
@@ -20,8 +32,9 @@ namespace OpenHintSQL.Schema
         /// <summary>Ordered list of parameters for this procedure/function.</summary>
         public List<ProcedureParameterInfo> Parameters { get; } = new List<ProcedureParameterInfo>();
 
-        /// <summary>Schema-qualified name (e.g. dbo.usp_GetCustomers).</summary>
-        public string FullName => $"{SchemaName}.{Name}";
+        /// <summary>Schema-qualified name (e.g. dbo.usp_GetCustomers). Built once; it is
+        /// matched against for every procedure on each EXEC completion keystroke.</summary>
+        public string FullName => _fullName ?? (_fullName = $"{SchemaName}.{Name}");
 
         /// <summary>True when this object is any kind of SQL function.</summary>
         public bool IsFunction => !string.IsNullOrEmpty(ObjectType) && ObjectType.Contains("FUNCTION");

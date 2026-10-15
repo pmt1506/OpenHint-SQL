@@ -130,6 +130,112 @@ namespace OpenHintSQL.Utils
         }
 
         /// <summary>
+        /// Gets the T-SQL batch (the text between GO separator lines) that contains the
+        /// caret, plus the caret offset inside that batch.
+        /// </summary>
+        /// <remarks>
+        /// Completion never needs anything outside the current batch: variables,
+        /// procedure parameters, aliases and statements are all batch-scoped. Reading
+        /// only this slice keeps per-keystroke work proportional to the batch instead
+        /// of the whole script, and avoids allocating a full-document string (which
+        /// lands on the large object heap for big scripts) on every keystroke.
+        /// </remarks>
+        /// <param name="view">The text view.</param>
+        /// <param name="caretOffsetInBatch">Caret position relative to the returned text.</param>
+        /// <returns>The batch text, or an empty string if unavailable.</returns>
+        public static string GetCaretBatchText(this ITextView view, out int caretOffsetInBatch)
+        {
+            caretOffsetInBatch = 0;
+
+            try
+            {
+                if (view == null || view.IsClosed)
+                    return string.Empty;
+
+                var caretPoint = view.Caret.Position.BufferPosition;
+                var snapshot = caretPoint.Snapshot;
+                if (snapshot == null || snapshot.Length == 0)
+                    return string.Empty;
+
+                int caret = caretPoint.Position;
+                int caretLineNumber = snapshot.GetLineNumberFromPosition(caret);
+
+                int start = 0;
+                for (int n = caretLineNumber - 1; n >= 0; n--)
+                {
+                    var line = snapshot.GetLineFromLineNumber(n);
+                    if (IsBatchSeparatorLine(snapshot, line))
+                    {
+                        start = line.EndIncludingLineBreak.Position;
+                        break;
+                    }
+                }
+
+                int end = snapshot.Length;
+                for (int n = caretLineNumber + 1; n < snapshot.LineCount; n++)
+                {
+                    var line = snapshot.GetLineFromLineNumber(n);
+                    if (IsBatchSeparatorLine(snapshot, line))
+                    {
+                        end = line.Start.Position;
+                        break;
+                    }
+                }
+
+                caretOffsetInBatch = caret - start;
+                return snapshot.GetText(start, end - start);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("GetCaretBatchText failed", ex);
+                caretOffsetInBatch = view.GetCaretPosition();
+                return view.GetAllText();
+            }
+        }
+
+        /// <summary>
+        /// True for a line holding only the GO batch separator, optionally followed by
+        /// a repeat count and/or a <c>--</c> comment. Reads characters straight from
+        /// the snapshot so scanning many lines doesn't allocate a string per line.
+        /// </summary>
+        private static bool IsBatchSeparatorLine(ITextSnapshot snapshot, ITextSnapshotLine line)
+        {
+            if (line.Length < 2)
+                return false;
+
+            int pos = line.Start.Position;
+            int end = line.End.Position;
+
+            while (pos < end && IsSpaceOrTab(snapshot[pos]))
+                pos++;
+
+            if (end - pos < 2 ||
+                char.ToUpperInvariant(snapshot[pos]) != 'G' ||
+                char.ToUpperInvariant(snapshot[pos + 1]) != 'O')
+            {
+                return false;
+            }
+
+            pos += 2;
+            if (pos == end)
+                return true;
+            if (!IsSpaceOrTab(snapshot[pos]))
+                return false;
+
+            while (pos < end && IsSpaceOrTab(snapshot[pos]))
+                pos++;
+            while (pos < end && char.IsDigit(snapshot[pos]))
+                pos++;
+            while (pos < end && IsSpaceOrTab(snapshot[pos]))
+                pos++;
+
+            return pos == end ||
+                   (pos + 1 < end && snapshot[pos] == '-' && snapshot[pos + 1] == '-');
+        }
+
+        private static bool IsSpaceOrTab(char c) => c == ' ' || c == '\t';
+
+        /// <summary>
         /// Replaces a span of text in the text buffer.
         /// </summary>
         /// <param name="view">The text view.</param>

@@ -4,7 +4,6 @@ using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using OpenHintSQL.Utils;
@@ -97,7 +96,7 @@ namespace OpenHintSQL.Schema
         /// Returns null if no file exists, the file is older than <see cref="MaxAge"/>,
         /// or deserialisation fails. Never throws.
         /// </summary>
-        public static async Task<DatabaseSchema> TryLoadAsync(string cacheKey)
+        public static DatabaseSchema TryLoad(string cacheKey)
         {
             if (DiskCacheDisabled)
                 return null;
@@ -116,13 +115,17 @@ namespace OpenHintSQL.Schema
                     return null;
                 }
 
-                string json;
+                // Deserialise straight from the file stream. Schema files for big
+                // databases are many MB; reading them into one string first puts a
+                // huge object on the large object heap and forces costly full GCs
+                // inside SSMS.
+                DatabaseSchema schema;
                 using (var reader = new StreamReader(path))
+                using (var jsonReader = new JsonTextReader(reader))
                 {
-                    json = await reader.ReadToEndAsync().ConfigureAwait(false);
+                    schema = JsonSerializer.Create(_jsonSettings).Deserialize<DatabaseSchema>(jsonReader);
                 }
 
-                var schema = JsonConvert.DeserializeObject<DatabaseSchema>(json, _jsonSettings);
                 if (schema == null)
                     return null;
 
@@ -136,7 +139,7 @@ namespace OpenHintSQL.Schema
             }
             catch (Exception ex)
             {
-                Logger.Warn($"SchemaPersister.TryLoadAsync failed: {ex.Message}");
+                Logger.Warn($"SchemaPersister.TryLoad failed: {ex.Message}");
                 return null;
             }
         }
@@ -146,7 +149,7 @@ namespace OpenHintSQL.Schema
         /// Writes atomically (to a .tmp file then moves) so a partial write can never
         /// corrupt the cache. Never throws.
         /// </summary>
-        public static async Task TrySaveAsync(string cacheKey, DatabaseSchema schema)
+        public static void TrySave(string cacheKey, DatabaseSchema schema)
         {
             if (schema == null || !schema.IsLoaded)
                 return;
@@ -160,11 +163,11 @@ namespace OpenHintSQL.Schema
                 var path = GetPath(cacheKey);
                 var tmpPath = path + ".tmp";
 
-                var json = JsonConvert.SerializeObject(schema, _jsonSettings);
-
+                // Serialise straight to the file (see TryLoad for why no big string).
                 using (var writer = new StreamWriter(tmpPath, append: false, encoding: Encoding.UTF8))
+                using (var jsonWriter = new JsonTextWriter(writer))
                 {
-                    await writer.WriteAsync(json).ConfigureAwait(false);
+                    JsonSerializer.Create(_jsonSettings).Serialize(jsonWriter, schema);
                 }
 
                 // Atomic replace: File.Move with overwrite=true keeps the cache file
@@ -177,7 +180,7 @@ namespace OpenHintSQL.Schema
             }
             catch (Exception ex)
             {
-                Logger.Warn($"SchemaPersister.TrySaveAsync failed: {ex.Message}");
+                Logger.Warn($"SchemaPersister.TrySave failed: {ex.Message}");
             }
         }
 

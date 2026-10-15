@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Newtonsoft.Json;
 using OpenHintSQL.Utils;
 
@@ -10,8 +11,26 @@ namespace OpenHintSQL.Settings
     internal static class TableUsageProvider
     {
         private const int FavoriteItemLimit = 3;
+
+        /// <summary>
+        /// Usage changes are flushed to disk after this quiet period, so accepting
+        /// several items in a row costs one background write instead of one
+        /// synchronous write per accepted item on the UI thread.
+        /// </summary>
+        private const int SaveDelayMs = 1500;
+
         private static readonly object Gate = new object();
+        private static readonly object SaveGate = new object();
         private static TableUsageStore _store;
+        private static Timer _saveTimer;
+
+        /// <summary>
+        /// Top-N favorite keys per item kind. Score and favorite lookups run once per
+        /// suggested item (thousands per popup on large databases), so the ranking is
+        /// computed once and only invalidated when usage is recorded.
+        /// </summary>
+        private static readonly Dictionary<OpenHintSQL.Providers.CompletionItemKind, HashSet<string>> FavoritesByKind =
+            new Dictionary<OpenHintSQL.Providers.CompletionItemKind, HashSet<string>>();
 
         public static void RecordTableUsage(string fullName)
             => RecordItemUsage(OpenHintSQL.Providers.CompletionItemKind.Table, fullName);
@@ -30,7 +49,8 @@ namespace OpenHintSQL.Settings
                     score = 0;
 
                 _store.TableUsage[key] = score + 1;
-                SaveUnsafe();
+                FavoritesByKind.Remove(kind);
+                ScheduleSaveUnsafe();
             }
         }
 
@@ -70,15 +90,22 @@ namespace OpenHintSQL.Settings
 
         private static HashSet<string> GetFavoriteItemNamesUnsafe(OpenHintSQL.Providers.CompletionItemKind kind)
         {
-            return new HashSet<string>(
+            if (FavoritesByKind.TryGetValue(kind, out var cached))
+                return cached;
+
+            string keyPrefix = BuildKeyPrefix(kind);
+            var favorites = new HashSet<string>(
                 _store.TableUsage
-                    .Where(kvp => kvp.Key.StartsWith(BuildKeyPrefix(kind), StringComparison.OrdinalIgnoreCase))
+                    .Where(kvp => kvp.Key.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase))
                     .Where(kvp => kvp.Value > 0)
                     .OrderByDescending(kvp => kvp.Value)
                     .ThenBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
                     .Take(FavoriteItemLimit)
                     .Select(kvp => kvp.Key),
                 StringComparer.OrdinalIgnoreCase);
+
+            FavoritesByKind[kind] = favorites;
+            return favorites;
         }
 
         private static string BuildKey(OpenHintSQL.Providers.CompletionItemKind kind, string fullName)
@@ -134,14 +161,36 @@ namespace OpenHintSQL.Settings
             }
         }
 
-        private static void SaveUnsafe()
+        private static void ScheduleSaveUnsafe()
+        {
+            if (_saveTimer == null)
+                _saveTimer = new Timer(_ => SaveNow(), null, SaveDelayMs, Timeout.Infinite);
+            else
+                _saveTimer.Change(SaveDelayMs, Timeout.Infinite);
+        }
+
+        /// <summary>
+        /// Runs on a thread-pool thread. Serialises under the lock (so the dictionary
+        /// can't change mid-write) but does the file I/O outside it.
+        /// </summary>
+        private static void SaveNow()
         {
             try
             {
-                Directory.CreateDirectory(SettingsDirectory);
-                File.WriteAllText(
-                    UsagePath,
-                    JsonConvert.SerializeObject(_store, Formatting.Indented));
+                string json;
+                lock (Gate)
+                {
+                    if (_store == null)
+                        return;
+
+                    json = JsonConvert.SerializeObject(_store, Formatting.Indented);
+                }
+
+                lock (SaveGate)
+                {
+                    Directory.CreateDirectory(SettingsDirectory);
+                    File.WriteAllText(UsagePath, json);
+                }
             }
             catch (Exception ex)
             {

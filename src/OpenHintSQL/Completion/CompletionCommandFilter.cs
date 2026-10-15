@@ -42,6 +42,8 @@ namespace OpenHintSQL.Completion
         private bool _isDisposed;
         private DispatcherTimer _nativeCompletionSuppressTimer;
         private DateTime _nativeCompletionSuppressUntilUtc;
+        private ConnectionInfo _cachedConnection;
+        private DateTime _connectionCheckedAtUtc = DateTime.MinValue;
 
         /// <summary>
         /// The next command target in the chain. Set by the caller after AddCommandFilter.
@@ -53,6 +55,20 @@ namespace OpenHintSQL.Completion
         /// </summary>
         private const int MinPrefixLength = 2;
         private const int NativeCompletionSuppressDurationMs = 5000;
+
+        /// <summary>
+        /// How long a looked-up SSMS connection is reused. The lookup goes through SSMS
+        /// services and reflection, which is too slow to repeat on every keystroke;
+        /// a short window still picks up a database switch almost immediately.
+        /// </summary>
+        private static readonly TimeSpan ConnectionCacheDuration = TimeSpan.FromSeconds(2);
+
+        /// <summary>
+        /// Explicit completion (Ctrl+Space) reloads a schema older than this in the
+        /// background, so newly created tables/columns show up without waiting for
+        /// the regular cache expiry.
+        /// </summary>
+        private static readonly TimeSpan ExplicitSchemaRefreshMinAge = TimeSpan.FromSeconds(60);
 
         /// <summary>
         /// Creates a new command filter for the given text view.
@@ -385,6 +401,16 @@ namespace OpenHintSQL.Completion
         {
             try
             {
+                var connection = GetActiveConnection(forceRefresh: true);
+                if (connection != null)
+                {
+                    SchemaCache.RefreshInBackgroundIfOlderThan(
+                        connection.Server,
+                        connection.Database,
+                        connection.ConnectionString,
+                        ExplicitSchemaRefreshMinAge);
+                }
+
                 TriggerCompletion(allowEmptyPrefix: true);
                 return IsPopupVisible() ? VSConstants.S_OK : VSConstants.E_FAIL;
             }
@@ -421,18 +447,16 @@ namespace OpenHintSQL.Completion
                 }
                 else if (typedChar == '[')
                 {
-                    string fullText = _textView.GetAllText();
-                    int caretOffset = _textView.GetCaretPosition();
-                    if (SqlContextParser.GetContext(fullText, caretOffset) == SqlContext.UseDatabase)
+                    string batchText = _textView.GetCaretBatchText(out int caretOffset);
+                    if (SqlContextParser.GetContext(batchText, caretOffset) == SqlContext.UseDatabase)
                         TriggerCompletion(allowEmptyPrefix: true);
                     else
                         DismissPopup();
                 }
                 else if (typedChar == '=')
                 {
-                    string fullText = _textView.GetAllText();
-                    int caretOffset = _textView.GetCaretPosition();
-                    var context = SqlContextParser.GetContext(fullText, caretOffset);
+                    string batchText = _textView.GetCaretBatchText(out int caretOffset);
+                    var context = SqlContextParser.GetContext(batchText, caretOffset);
 
                     if (ShouldTriggerExpressionCompletionAfterOperator(context))
                         TriggerCompletion(allowEmptyPrefix: true);
@@ -442,11 +466,10 @@ namespace OpenHintSQL.Completion
                 else if (char.IsWhiteSpace(typedChar))
                 {
                     // Whitespace right after a clause keyword (FROM, JOIN, EXEC, …)
-                    // should pop the table/proc list immediately — that's the
+                    // should pop the table/proc list immediately.
                     // Otherwise dismiss.
-                    string fullText = _textView.GetAllText();
-                    int caretOffset = _textView.GetCaretPosition();
-                    if (SqlContextParser.TryGetClauseAtCaret(fullText, caretOffset, out _))
+                    string batchText = _textView.GetCaretBatchText(out int caretOffset);
+                    if (SqlContextParser.TryGetClauseAtCaret(batchText, caretOffset, out _))
                     {
                         TriggerCompletion(allowEmptyPrefix: true);
                     }
@@ -475,18 +498,9 @@ namespace OpenHintSQL.Completion
             try
             {
                 string word = _textView.GetWordBeforeCaret();
-                string fullText = _textView.GetAllText();
-                int caretOffset = _textView.GetCaretPosition();
-                var context = SqlContextParser.GetContext(fullText, caretOffset);
 
                 if (string.IsNullOrEmpty(word))
                 {
-                    if (IsObjectNameContext(context) || IsPopupVisible())
-                    {
-                        DismissPopup();
-                        return;
-                    }
-
                     DismissPopup();
                 }
                 else if (word.Length < MinPrefixLength && (word.Length == 0 || word[0] != '@'))
@@ -523,20 +537,6 @@ namespace OpenHintSQL.Completion
             }
         }
 
-        private static bool IsObjectNameContext(SqlContext context)
-        {
-            switch (context)
-            {
-                case SqlContext.FromClause:
-                case SqlContext.JoinClause:
-                case SqlContext.UpdateTarget:
-                case SqlContext.InsertColumns:
-                    return true;
-                default:
-                    return false;
-            }
-        }
-
         /// <summary>
         /// Triggers or updates the completion popup based on the current word before the caret.
         /// </summary>
@@ -552,10 +552,8 @@ namespace OpenHintSQL.Completion
             try
             {
                 string prefix = _textView.GetWordBeforeCaret();
-                string fullText = _textView.GetAllText();
-                int caretOffset = _textView.GetCaretPosition();
-                var context = SqlContextParser.GetContext(fullText, caretOffset);
-                bool inDotContext = SqlContextParser.GetTableContext(fullText, caretOffset) != null;
+                string batchText = _textView.GetCaretBatchText(out int caretOffset);
+                var context = SqlContextParser.GetContext(batchText, caretOffset);
                 bool hasContextPopup = IsPopupVisible() || context == SqlContext.UseDatabase;
 
                 if (!allowEmptyPrefix && string.IsNullOrEmpty(prefix))
@@ -574,44 +572,20 @@ namespace OpenHintSQL.Completion
                     return;
                 }
 
-                // If the popup is already visible AND the user is still narrowing a word,
-                // just update the filter. Empty-prefix triggers (FROM␣ / JOIN␣ / dot) always
-                // need a fresh query — they swap the popup's contents entirely.
-                if (IsPopupVisible() && !string.IsNullOrEmpty(prefix) && !_popup.IsShowingStatus && !inDotContext)
-                {
-                    StartNativeCompletionSuppression();
-                    _popup.UpdateFilter(prefix);
-
-                    if (_popup.SelectedItem == null && !_popup.HasItems)
-                    {
-                        DismissPopup();
-                    }
-                    return;
-                }
-
-                // Get connection info for schema completion
-                string server = null;
-                string database = null;
-                string connectionString = null;
-
-                try
-                {
-                    var connInfo = ConnectionTracker.GetActiveConnection();
-                    if (connInfo != null)
-                    {
-                        server = connInfo.Server;
-                        database = connInfo.Database;
-                        connectionString = connInfo.ConnectionString;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.Warn($"Failed to get connection info: {ex.Message}");
-                }
+                // Always re-query, even while the popup is open. The popup only holds the
+                // top-ranked slice of the previous result, so narrowing that slice locally
+                // drops matches that were ranked out of it (e.g. FROM␣ lists the first
+                // tables, then typing "tiep" could never surface TT_TIEPNHAN).
+                var connInfo = GetActiveConnection(forceRefresh: false);
 
                 // Generate completion items
                 var items = CompletionEngine.GetCompletionItems(
-                    prefix, fullText, caretOffset, server, database, connectionString);
+                    prefix,
+                    batchText,
+                    caretOffset,
+                    connInfo?.Server,
+                    connInfo?.Database,
+                    connInfo?.ConnectionString);
 
                 Logger.Diagnostic($"Completion generated {items?.Count ?? 0} item(s) for prefix='{prefix}'");
 
@@ -630,6 +604,32 @@ namespace OpenHintSQL.Completion
                 Logger.Error("TriggerCompletion failed", ex);
                 DismissPopup();
             }
+        }
+
+        /// <summary>
+        /// Returns the active SSMS connection, reusing a recent lookup unless
+        /// <paramref name="forceRefresh"/> is set. A "no connection" answer is
+        /// cached too, so a disconnected window doesn't repeat the lookup per keystroke.
+        /// </summary>
+        private ConnectionInfo GetActiveConnection(bool forceRefresh)
+        {
+            var now = DateTime.UtcNow;
+            if (!forceRefresh && now - _connectionCheckedAtUtc < ConnectionCacheDuration)
+                return _cachedConnection;
+
+            ConnectionInfo connection = null;
+            try
+            {
+                connection = ConnectionTracker.GetActiveConnection();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Failed to get connection info: {ex.Message}");
+            }
+
+            _cachedConnection = connection;
+            _connectionCheckedAtUtc = now;
+            return connection;
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -687,9 +687,8 @@ namespace OpenHintSQL.Completion
 
                     // If the snippet landed the caret right after a clause keyword
                     // (e.g. `ssf` → `SELECT * FROM `), immediately pop the table list.
-                    string fullText = _textView.GetAllText();
-                    int caretAfter = _textView.GetCaretPosition();
-                    if (SqlContextParser.TryGetClauseAtCaret(fullText, caretAfter, out _))
+                    string batchText = _textView.GetCaretBatchText(out int caretAfter);
+                    if (SqlContextParser.TryGetClauseAtCaret(batchText, caretAfter, out _))
                     {
                         TriggerCompletion(allowEmptyPrefix: true);
                     }
