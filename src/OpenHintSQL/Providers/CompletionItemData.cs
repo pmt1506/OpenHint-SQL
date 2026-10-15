@@ -13,6 +13,7 @@ namespace OpenHintSQL.Providers
         View,
         Alias,
         Column,
+        Variable,
         Procedure,
         Function,
         DataType,
@@ -61,6 +62,9 @@ namespace OpenHintSQL.Providers
         /// <summary>Key used to select the appropriate icon for this item.</summary>
         public string IconKey { get; set; }
 
+        /// <summary>Stable key used for usage tracking and favorites.</summary>
+        public string UsageKey { get; set; }
+
         public Geometry IconGeometry => GetIconGeometry(Kind);
         public string FavoriteMarker => IsFavorite ? "\u2605" : string.Empty;
         public Brush BadgeBackgroundBrush => GetBadgeBackgroundBrush(Kind);
@@ -77,6 +81,8 @@ namespace OpenHintSQL.Providers
         private static readonly Brush AliasBadgeForegroundBrush = CreateFrozenBrush("#B26A00");
         private static readonly Brush ColumnBadgeBackgroundBrush = CreateFrozenBrush("#E9EEF3");
         private static readonly Brush ColumnBadgeForegroundBrush = CreateFrozenBrush("#57606A");
+        private static readonly Brush VariableBadgeBackgroundBrush = CreateFrozenBrush("#FFF4D6");
+        private static readonly Brush VariableBadgeForegroundBrush = CreateFrozenBrush("#A15C00");
         private static readonly Brush FunctionBadgeBackgroundBrush = CreateFrozenBrush("#DDF5E5");
         private static readonly Brush FunctionBadgeForegroundBrush = CreateFrozenBrush("#1A7F37");
         private static readonly Brush ProcedureBadgeBackgroundBrush = CreateFrozenBrush("#E0F2FE");
@@ -90,6 +96,7 @@ namespace OpenHintSQL.Providers
         private static readonly Brush ViewTextBrush = CreateFrozenBrush("#5A32A3");
         private static readonly Brush AliasTextBrush = CreateFrozenBrush("#9A5B00");
         private static readonly Brush ColumnTextBrush = CreateFrozenBrush("#1F2328");
+        private static readonly Brush VariableTextBrush = CreateFrozenBrush("#7A4A00");
         private static readonly Brush FunctionTextBrush = CreateFrozenBrush("#176F2C");
         private static readonly Brush ProcedureTextBrush = CreateFrozenBrush("#0E7490");
         private static readonly Brush NeutralTextBrush = CreateFrozenBrush("#1F2328");
@@ -98,6 +105,7 @@ namespace OpenHintSQL.Providers
         private static readonly Brush ViewRowTintBrush = CreateFrozenBrush("#FBF8FF");
         private static readonly Brush AliasRowTintBrush = CreateFrozenBrush("#FFFBF2");
         private static readonly Brush ColumnRowTintBrush = CreateFrozenBrush("#FBFCFD");
+        private static readonly Brush VariableRowTintBrush = CreateFrozenBrush("#FFFDF7");
         private static readonly Brush FunctionRowTintBrush = CreateFrozenBrush("#F5FCF7");
         private static readonly Brush ProcedureRowTintBrush = CreateFrozenBrush("#F5FBFE");
         private static readonly Brush NeutralRowTintBrush = CreateFrozenBrush("#FFFFFF");
@@ -122,6 +130,8 @@ namespace OpenHintSQL.Providers
                     return AliasIconGeometry;
                 case CompletionItemKind.Column:
                     return ColumnIconGeometry;
+                case CompletionItemKind.Variable:
+                    return DotIconGeometry;
                 case CompletionItemKind.Function:
                     return FunctionIconGeometry;
                 case CompletionItemKind.Procedure:
@@ -139,6 +149,7 @@ namespace OpenHintSQL.Providers
                 case CompletionItemKind.View: return ViewBadgeBackgroundBrush;
                 case CompletionItemKind.Alias: return AliasBadgeBackgroundBrush;
                 case CompletionItemKind.Column: return ColumnBadgeBackgroundBrush;
+                case CompletionItemKind.Variable: return VariableBadgeBackgroundBrush;
                 case CompletionItemKind.Function: return FunctionBadgeBackgroundBrush;
                 case CompletionItemKind.Procedure: return ProcedureBadgeBackgroundBrush;
                 case CompletionItemKind.Database: return DatabaseBadgeBackgroundBrush;
@@ -154,6 +165,7 @@ namespace OpenHintSQL.Providers
                 case CompletionItemKind.View: return ViewBadgeForegroundBrush;
                 case CompletionItemKind.Alias: return AliasBadgeForegroundBrush;
                 case CompletionItemKind.Column: return ColumnBadgeForegroundBrush;
+                case CompletionItemKind.Variable: return VariableBadgeForegroundBrush;
                 case CompletionItemKind.Function: return FunctionBadgeForegroundBrush;
                 case CompletionItemKind.Procedure: return ProcedureBadgeForegroundBrush;
                 case CompletionItemKind.Database: return DatabaseBadgeForegroundBrush;
@@ -169,6 +181,7 @@ namespace OpenHintSQL.Providers
                 case CompletionItemKind.View: return ViewTextBrush;
                 case CompletionItemKind.Alias: return AliasTextBrush;
                 case CompletionItemKind.Column: return ColumnTextBrush;
+                case CompletionItemKind.Variable: return VariableTextBrush;
                 case CompletionItemKind.Function: return FunctionTextBrush;
                 case CompletionItemKind.Procedure: return ProcedureTextBrush;
                 default: return NeutralTextBrush;
@@ -183,6 +196,7 @@ namespace OpenHintSQL.Providers
                 case CompletionItemKind.View: return ViewRowTintBrush;
                 case CompletionItemKind.Alias: return AliasRowTintBrush;
                 case CompletionItemKind.Column: return ColumnRowTintBrush;
+                case CompletionItemKind.Variable: return VariableRowTintBrush;
                 case CompletionItemKind.Function: return FunctionRowTintBrush;
                 case CompletionItemKind.Procedure: return ProcedureRowTintBrush;
                 default: return NeutralRowTintBrush;

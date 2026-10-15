@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using OpenHintSQL.Providers;
+using OpenHintSQL.Settings;
 using OpenHintSQL.Utils;
 
 namespace OpenHintSQL.Schema
@@ -351,6 +352,7 @@ namespace OpenHintSQL.Schema
 
             foreach (var col in tableInfo.Columns)
             {
+                string usageKey = $"{tableInfo.FullName}.{col.Name}";
                 results.Add(new CompletionItemData
                 {
                     Text = col.Name,
@@ -358,6 +360,9 @@ namespace OpenHintSQL.Schema
                     Description = col.DisplayText,
                     Kind = CompletionItemKind.Column,
                     Priority = 5,
+                    UsageScore = TableUsageProvider.GetUsageScore(CompletionItemKind.Column, usageKey),
+                    IsFavorite = TableUsageProvider.IsFavorite(CompletionItemKind.Column, usageKey),
+                    UsageKey = usageKey,
                     IconKey = "Column"
                 });
             }

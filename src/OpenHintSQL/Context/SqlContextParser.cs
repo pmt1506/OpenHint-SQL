@@ -158,6 +158,60 @@ namespace OpenHintSQL.Context
         /// </summary>
         /// <param name="text">Full editor text.</param>
         /// <param name="caretOffset">Zero-based caret position within the text.</param>
+        /// <summary>
+        /// Returns true when the caret is currently inside a single-quoted string
+        /// literal or a backtick-delimited identifier/string.
+        /// </summary>
+        public static bool IsInsideQuotedText(string text, int caretOffset)
+        {
+            if (string.IsNullOrEmpty(text) || caretOffset <= 0)
+                return false;
+
+            int limit = Math.Min(caretOffset, text.Length);
+            bool inSingleQuote = false;
+            bool inBacktick = false;
+
+            for (int i = 0; i < limit; i++)
+            {
+                char c = text[i];
+
+                if (inSingleQuote)
+                {
+                    if (c == '\'')
+                    {
+                        if (i + 1 < limit && text[i + 1] == '\'')
+                        {
+                            i++;
+                            continue;
+                        }
+
+                        inSingleQuote = false;
+                    }
+
+                    continue;
+                }
+
+                if (inBacktick)
+                {
+                    if (c == '`')
+                        inBacktick = false;
+
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    inSingleQuote = true;
+                    continue;
+                }
+
+                if (c == '`')
+                    inBacktick = true;
+            }
+
+            return inSingleQuote || inBacktick;
+        }
+
         public static SqlContext GetContext(string text, int caretOffset)
         {
             if (string.IsNullOrEmpty(text) || caretOffset <= 0)

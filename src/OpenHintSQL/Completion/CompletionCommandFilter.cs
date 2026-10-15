@@ -1,6 +1,5 @@
 using System;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -43,9 +42,6 @@ namespace OpenHintSQL.Completion
         private bool _isDisposed;
         private DispatcherTimer _nativeCompletionSuppressTimer;
         private DateTime _nativeCompletionSuppressUntilUtc;
-        private static readonly Regex JoinSuggestionTailBoundaryPattern = new Regex(
-            @"\b(?:INNER\s+JOIN|LEFT\s+(?:OUTER\s+)?JOIN|RIGHT\s+(?:OUTER\s+)?JOIN|FULL\s+(?:OUTER\s+)?JOIN|CROSS\s+JOIN|JOIN|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|UNION|EXCEPT|INTERSECT)\b|;",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         /// <summary>
         /// The next command target in the chain. Set by the caller after AddCommandFilter.
@@ -389,7 +385,7 @@ namespace OpenHintSQL.Completion
         {
             try
             {
-                TriggerCompletion(allowEmptyPrefix: true, explicitInvocation: true);
+                TriggerCompletion(allowEmptyPrefix: true);
                 return IsPopupVisible() ? VSConstants.S_OK : VSConstants.E_FAIL;
             }
             catch (Exception ex)
@@ -414,7 +410,7 @@ namespace OpenHintSQL.Completion
                 if (typedChar == '\0')
                     return;
 
-                if (char.IsLetterOrDigit(typedChar) || typedChar == '_')
+                if (char.IsLetterOrDigit(typedChar) || typedChar == '_' || typedChar == '@')
                 {
                     TriggerCompletion();
                 }
@@ -450,8 +446,7 @@ namespace OpenHintSQL.Completion
                     // Otherwise dismiss.
                     string fullText = _textView.GetAllText();
                     int caretOffset = _textView.GetCaretPosition();
-                    if (SqlContextParser.TryGetClauseAtCaret(fullText, caretOffset, out var clauseContext) &&
-                        ShouldAutoTriggerClauseCompletion(clauseContext))
+                    if (SqlContextParser.TryGetClauseAtCaret(fullText, caretOffset, out _))
                     {
                         TriggerCompletion(allowEmptyPrefix: true);
                     }
@@ -494,7 +489,7 @@ namespace OpenHintSQL.Completion
 
                     DismissPopup();
                 }
-                else if (word.Length < MinPrefixLength)
+                else if (word.Length < MinPrefixLength && (word.Length == 0 || word[0] != '@'))
                 {
                     DismissPopup();
                 }
@@ -545,15 +540,14 @@ namespace OpenHintSQL.Completion
         /// <summary>
         /// Triggers or updates the completion popup based on the current word before the caret.
         /// </summary>
-        private void TriggerCompletion() => TriggerCompletion(allowEmptyPrefix: false, explicitInvocation: false);
-        private void TriggerCompletion(bool allowEmptyPrefix) => TriggerCompletion(allowEmptyPrefix, explicitInvocation: false);
+        private void TriggerCompletion() => TriggerCompletion(allowEmptyPrefix: false);
 
         /// <summary>
         /// Triggers or updates the completion popup. When <paramref name="allowEmptyPrefix"/>
         /// is true, the <see cref="MinPrefixLength"/> gate is skipped — the engine itself
         /// decides whether an empty prefix makes sense for the current SQL context.
         /// </summary>
-        private void TriggerCompletion(bool allowEmptyPrefix, bool explicitInvocation)
+        private void TriggerCompletion(bool allowEmptyPrefix)
         {
             try
             {
@@ -570,17 +564,11 @@ namespace OpenHintSQL.Completion
                     return;
                 }
 
+                bool variablePrefix = !string.IsNullOrEmpty(prefix) && prefix[0] == '@';
+
                 if (!allowEmptyPrefix &&
                     !hasContextPopup &&
-                    (string.IsNullOrEmpty(prefix) || prefix.Length < MinPrefixLength))
-                {
-                    DismissPopup();
-                    return;
-                }
-
-                if (!explicitInvocation &&
-                    !IsPopupVisible() &&
-                    context == SqlContext.JoinClause)
+                    (string.IsNullOrEmpty(prefix) || (prefix.Length < MinPrefixLength && !variablePrefix)))
                 {
                     DismissPopup();
                     return;
@@ -701,8 +689,7 @@ namespace OpenHintSQL.Completion
                     // (e.g. `ssf` → `SELECT * FROM `), immediately pop the table list.
                     string fullText = _textView.GetAllText();
                     int caretAfter = _textView.GetCaretPosition();
-                    if (SqlContextParser.TryGetClauseAtCaret(fullText, caretAfter, out var clauseContext) &&
-                        ShouldAutoTriggerClauseCompletion(clauseContext))
+                    if (SqlContextParser.TryGetClauseAtCaret(fullText, caretAfter, out _))
                     {
                         TriggerCompletion(allowEmptyPrefix: true);
                     }
@@ -773,16 +760,13 @@ namespace OpenHintSQL.Completion
                 int replaceStart = IsObjectReferenceCompletion(item)
                     ? GetObjectReferenceBeforeCaretStart(caretPos)
                     : _textView.GetWordBeforeCaretStart();
-                int replaceEnd = item.Kind == CompletionItemKind.JoinSuggestion
-                    ? GetJoinSuggestionReplaceEnd(caretPos)
-                    : caretPos;
-                int wordLength = Math.Max(0, replaceEnd - replaceStart);
+                int wordLength = Math.Max(0, caretPos - replaceStart);
 
                 if (wordLength >= 0)
                 {
                     _textView.ReplaceSpan(replaceStart, wordLength, insertText);
-                    if (item.Kind == CompletionItemKind.Table)
-                        TableUsageProvider.RecordTableUsage(item.Text);
+                    if (item.Kind == CompletionItemKind.Table || item.Kind == CompletionItemKind.Column)
+                        TableUsageProvider.RecordItemUsage(item.Kind, item.UsageKey ?? item.Text);
                 }
 
                 Logger.Diagnostic($"Inserted completion: '{insertText}'");
@@ -820,72 +804,17 @@ namespace OpenHintSQL.Completion
             }
         }
 
-        private int GetJoinSuggestionReplaceEnd(int caretPos)
-        {
-            try
-            {
-                var snapshot = _textView?.TextSnapshot;
-                if (snapshot == null)
-                    return caretPos;
-
-                string text = snapshot.GetText();
-                int end = Math.Min(Math.Max(caretPos, 0), snapshot.Length);
-
-                // If the caret is in the middle of a partially typed table token,
-                // replace the whole token, not just the left side.
-                while (end < snapshot.Length && IsObjectReferencePrefixChar(text[end]))
-                    end++;
-
-                int lineEnd = end;
-                while (lineEnd < snapshot.Length && text[lineEnd] != '\r' && text[lineEnd] != '\n')
-                    lineEnd++;
-
-                if (lineEnd <= end)
-                    return end;
-
-                var tail = text.Substring(end, lineEnd - end);
-                var onMatch = Regex.Match(tail, @"^\s+ON\b", RegexOptions.IgnoreCase);
-                if (!onMatch.Success)
-                    return end;
-
-                // Replace a stale/partial ON clause after the caret with the
-                // FK-generated ON clause. Stop before the next clause on the same line.
-                var boundary = JoinSuggestionTailBoundaryPattern.Match(tail, onMatch.Index + onMatch.Length);
-                return boundary.Success ? end + boundary.Index : lineEnd;
-            }
-            catch (Exception ex)
-            {
-                Logger.Warn($"GetJoinSuggestionReplaceEnd failed: {ex.Message}");
-                return caretPos;
-            }
-        }
-
         private static bool IsObjectReferenceCompletion(CompletionItemData item)
         {
             return item != null &&
                 (item.Kind == CompletionItemKind.Table ||
                  item.Kind == CompletionItemKind.View ||
-                 item.Kind == CompletionItemKind.Database ||
-                 item.Kind == CompletionItemKind.JoinSuggestion);
+                 item.Kind == CompletionItemKind.Database);
         }
 
         private static bool IsObjectReferencePrefixChar(char c)
         {
             return char.IsLetterOrDigit(c) || c == '_' || c == '.' || c == '[' || c == ']';
-        }
-
-        private static bool ShouldAutoTriggerClauseCompletion(SqlContext context)
-        {
-            switch (context)
-            {
-                case SqlContext.JoinClause:
-                    // JOIN completion is the heaviest branch because it computes FK and
-                    // heuristic suggestions. Keep it manual so join snippets behave like
-                    // plain text expansion instead of forcing an immediate popup refresh.
-                    return false;
-                default:
-                    return true;
-            }
         }
 
         /// <summary>

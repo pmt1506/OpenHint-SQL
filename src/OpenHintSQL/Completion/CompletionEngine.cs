@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using OpenHintSQL.Context;
@@ -399,8 +400,8 @@ namespace OpenHintSQL.Completion
                         break;
 
                     case SqlContext.JoinClause:
-                        // FK-aware JOIN suggestions float above generic table matches.
-                        AddJoinSuggestions(results, schema, scopeText, scopeCaretOffset, prefix);
+                        // Table-name position only — join-column suggestions appear
+                        // later, in the ON clause (AddOnClauseJoinColumnSuggestions).
                         AddTablesAndViews(results, schema, prefix, includeAlias: true, excludeCurrentJoin: true, fullText: scopeText, caretOffset: scopeCaretOffset);
                         break;
 
@@ -427,6 +428,7 @@ namespace OpenHintSQL.Completion
 
                     case SqlContext.OnClause:
                         AddScopedAliasSuggestions(results, schema, prefix, scopeText, scopeCaretOffset, prioritizeCurrentJoinTarget: true, includeTablesAfterCaret: false);
+                        AddOnClauseJoinConditionSuggestions(results, schema, prefix, scopeText, scopeCaretOffset);
                         AddOnClauseJoinColumnSuggestions(results, schema, prefix, scopeText, scopeCaretOffset);
                         AddColumns(results, schema, prefix, scopeText, scopeCaretOffset, context);
                         break;
@@ -767,11 +769,15 @@ namespace OpenHintSQL.Completion
                 ? col.Name
                 : $"{sourceTableName}.{col.Name}";
 
+            string description = string.IsNullOrWhiteSpace(sourceTableName)
+                ? col.DisplayText
+                : $"{col.DisplayText}  [{sourceTableName}]";
+
             return new CompletionItemData
             {
                 Text = col.Name,
                 InsertText = col.Name,
-                Description = col.DisplayText,
+                Description = description,
                 Kind = CompletionItemKind.Column,
                 Priority = priority,
                 SortOrder = sortOrder,
@@ -853,7 +859,7 @@ namespace OpenHintSQL.Completion
         }
 
         // ───────────────────────────────────────────────
-        //  JOIN suggestions (FK-aware)
+        //  JOIN scope parsing (shared by ON-clause suggestions)
         // ───────────────────────────────────────────────
 
         /// <summary>
@@ -881,270 +887,6 @@ namespace OpenHintSQL.Completion
             public string EffectiveAlias => !string.IsNullOrEmpty(Alias) ? Alias : Table?.Name;
         }
 
-        /// <summary>
-        /// Builds FK-aware JOIN suggestions for every table that has a foreign-key relationship
-        /// with one of the tables already in scope (FROM/JOIN before the caret).
-        /// Each suggestion is a complete <c>&lt;table&gt; &lt;alias&gt; ON ...</c> insertion.
-        /// </summary>
-        private static void AddJoinSuggestions(
-            List<CompletionItemData> results,
-            DatabaseSchema schema,
-            string fullText,
-            int caretOffset,
-            string prefix)
-        {
-            try
-            {
-                if (schema == null || !schema.IsLoaded)
-                    return;
-
-                var completionScope = GetCompletionScope(fullText, caretOffset);
-                if (string.IsNullOrEmpty(completionScope.text))
-                    return;
-
-                var scopeText = GetCompletedJoinScopeText(completionScope.text, completionScope.caretOffset);
-                var scoped = ResolveScopedTables(scopeText, schema);
-                if (scoped.Count == 0)
-                    return;
-
-                // Aliases (including generated ones) we must avoid colliding with.
-                var usedAliases = new HashSet<string>(
-                    scoped.Select(s => s.EffectiveAlias),
-                    StringComparer.OrdinalIgnoreCase);
-
-                // De-dup exact suggestion shapes, but allow the same target table to appear
-                // multiple times when different scoped tables can join to it.
-                var emittedSuggestions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                for (int scopedIndex = scoped.Count - 1; scopedIndex >= 0; scopedIndex--)
-                {
-                    var scopedRef = scoped[scopedIndex];
-                    if (scopedRef.Table == null)
-                        continue;
-
-                    // Outgoing FKs: this scoped table has FKs to other tables.
-                    foreach (var fk in scopedRef.Table.ForeignKeys)
-                    {
-                        EmitJoinSuggestion(results, fk, scopedRef, fk.ReferencedTable,
-                            fkParentIsScoped: true, usedAliases, emittedSuggestions, prefix, scopedIndex);
-                    }
-
-                    // Incoming FKs: other tables have FKs to this scoped table.
-                    foreach (var fk in scopedRef.Table.IncomingForeignKeys)
-                    {
-                        EmitJoinSuggestion(results, fk, scopedRef, fk.ParentTable,
-                            fkParentIsScoped: false, usedAliases, emittedSuggestions, prefix, scopedIndex);
-                    }
-                }
-
-                AddHeuristicJoinSuggestions(results, schema, scoped, usedAliases, emittedSuggestions, prefix);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error("AddJoinSuggestions failed", ex);
-            }
-        }
-
-        private static void EmitJoinSuggestion(
-            List<CompletionItemData> results,
-            ForeignKeyInfo fk,
-            ScopedTable scopedRef,
-            TableInfo targetTable,
-            bool fkParentIsScoped,
-            HashSet<string> usedAliases,
-            HashSet<string> emittedSuggestions,
-            string prefix,
-            int scopedIndex)
-        {
-            if (targetTable == null || ReferenceEquals(targetTable, scopedRef.Table))
-                return;
-            if (!MatchesPrefix(targetTable.FullName, prefix) &&
-                !MatchesPrefix(targetTable.Name, prefix) &&
-                !MatchesPrefix(targetTable.BracketedName, prefix))
-                return;
-
-            var newAlias = GenerateAlias(targetTable.Name, usedAliases);
-
-            // Compose the ON clause. ParentColumns/ReferencedColumns are paired by ordinal.
-            // If the scoped table is the FK *parent*, the new table is the referenced side, and vice versa.
-            var on = new StringBuilder();
-            for (int i = 0; i < fk.ParentColumns.Count && i < fk.ReferencedColumns.Count; i++)
-            {
-                if (i > 0) on.Append(" AND ");
-                if (fkParentIsScoped)
-                {
-                    // scoped = parent, target = referenced
-                    on.Append(scopedRef.EffectiveAlias).Append('.').Append(fk.ParentColumns[i].Name);
-                    on.Append(" = ");
-                    on.Append(newAlias).Append('.').Append(fk.ReferencedColumns[i].Name);
-                }
-                else
-                {
-                    // scoped = referenced, target = parent
-                    on.Append(newAlias).Append('.').Append(fk.ParentColumns[i].Name);
-                    on.Append(" = ");
-                    on.Append(scopedRef.EffectiveAlias).Append('.').Append(fk.ReferencedColumns[i].Name);
-                }
-            }
-
-            // Display text shows what the user will get; InsertText starts at the table
-            // reference because the leading JOIN keyword is preserved from the query text.
-            string display = $"{GetObjectInsertName(targetTable)} {newAlias} ON {on}";
-            string insert = $"{GetObjectInsertName(targetTable)} {newAlias} ON {on}";
-            string suggestionKey = $"FK|{scopedRef.EffectiveAlias}|{targetTable.FullName}|{on}";
-            if (!emittedSuggestions.Add(suggestionKey))
-                return;
-
-            // For empty-prefix JOIN trigger, InsertText is spliced at the caret position
-            // immediately after the trailing space of "JOIN ".
-            results.Add(new CompletionItemData
-            {
-                Text = display,
-                InsertText = insert,
-                Description = $"FK {fk.Name}",
-                Kind = CompletionItemKind.JoinSuggestion,
-                Priority = 100 + scopedIndex,
-                IconKey = "JoinSuggestion"
-            });
-        }
-
-        private static void AddHeuristicJoinSuggestions(
-            List<CompletionItemData> results,
-            DatabaseSchema schema,
-            List<ScopedTable> scoped,
-            HashSet<string> usedAliases,
-            HashSet<string> emittedSuggestions,
-            string prefix)
-        {
-            try
-            {
-                if (schema == null || scoped == null || scoped.Count == 0)
-                    return;
-
-                var allTargets = schema.Tables.Values.Concat(schema.Views.Values);
-                for (int scopedIndex = scoped.Count - 1; scopedIndex >= 0; scopedIndex--)
-                {
-                    var scopedRef = scoped[scopedIndex];
-                    if (scopedRef.Table == null)
-                        continue;
-                    foreach (var targetTable in allTargets)
-                    {
-                        if (targetTable == null || ReferenceEquals(targetTable, scopedRef.Table))
-                            continue;
-                        if (!MatchesTablePrefix(targetTable, prefix))
-                            continue;
-
-                        if (!TryBuildHeuristicJoin(scopedRef, targetTable, out var onClauseTemplate, out var matchDetail))
-                            continue;
-
-                        var newAlias = GenerateAlias(targetTable.Name, usedAliases);
-                        string onClause = onClauseTemplate.Replace("{alias}", newAlias);
-                        string display = $"{GetObjectInsertName(targetTable)} {newAlias} ON {onClause}";
-                        string suggestionKey = $"HEUR|{scopedRef.EffectiveAlias}|{targetTable.FullName}|{onClause}";
-                        if (!emittedSuggestions.Add(suggestionKey))
-                            continue;
-                        results.Add(new CompletionItemData
-                        {
-                            Text = display,
-                            InsertText = display,
-                            Description = $"Heuristic join on {matchDetail}",
-                            Kind = CompletionItemKind.JoinSuggestion,
-                            Priority = 60 + scopedIndex,
-                            IconKey = "JoinSuggestion"
-                        });
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Error("AddHeuristicJoinSuggestions failed", ex);
-            }
-        }
-
-        private static bool TryBuildHeuristicJoin(
-            ScopedTable scopedRef,
-            TableInfo targetTable,
-            out string onClause,
-            out string matchDetail)
-        {
-            onClause = null;
-            matchDetail = null;
-
-            if (scopedRef.Table?.Columns == null || targetTable?.Columns == null)
-                return false;
-
-            var targetKeyColumns = GetLikelyJoinKeyColumns(targetTable).ToList();
-            var scopedKeyColumns = GetLikelyJoinKeyColumns(scopedRef.Table).ToList();
-            if (targetKeyColumns.Count == 0 || scopedKeyColumns.Count == 0)
-                return false;
-
-            var preferredTargetKeys = GetPreferredTargetJoinKeys(targetTable).ToList();
-            foreach (var targetKey in preferredTargetKeys)
-            {
-                string normalizedTargetKey = NormalizeIdentifier(targetKey.Name);
-                foreach (var scopedColumn in scopedRef.Table.Columns.OrderBy(column => column.OrdinalPosition))
-                {
-                    if (!string.Equals(NormalizeIdentifier(scopedColumn.Name), normalizedTargetKey, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    onClause = $"{scopedRef.EffectiveAlias}.{scopedColumn.Name} = {{alias}}.{targetKey.Name}";
-                    matchDetail = scopedColumn.Name;
-                    return true;
-                }
-            }
-
-            foreach (var scopedColumn in scopedRef.Table.Columns)
-            {
-                if (!TryGetIdBaseName(scopedColumn.Name, out var scopedBase))
-                    continue;
-
-                if (MatchesTableNameVariant(targetTable.Name, scopedBase))
-                {
-                    var targetKey = FindBestTargetKey(targetKeyColumns, scopedColumn, scopedBase);
-                    if (targetKey != null)
-                    {
-                        onClause = $"{scopedRef.EffectiveAlias}.{scopedColumn.Name} = {{alias}}.{targetKey.Name}";
-                        matchDetail = scopedColumn.Name;
-                        return true;
-                    }
-                }
-            }
-
-            foreach (var targetColumn in targetTable.Columns)
-            {
-                if (!TryGetIdBaseName(targetColumn.Name, out var targetBase))
-                    continue;
-
-                if (MatchesTableNameVariant(scopedRef.Table.Name, targetBase))
-                {
-                    var scopedKey = FindBestTargetKey(scopedKeyColumns, targetColumn, targetBase);
-                    if (scopedKey != null)
-                    {
-                        onClause = $"{{alias}}.{targetColumn.Name} = {scopedRef.EffectiveAlias}.{scopedKey.Name}";
-                        matchDetail = targetColumn.Name;
-                        return true;
-                    }
-                }
-            }
-
-            foreach (var scopedColumn in scopedRef.Table.Columns)
-            {
-                if (!LooksLikeJoinId(scopedColumn.Name))
-                    continue;
-
-                var targetColumn = targetTable.Columns.FirstOrDefault(column =>
-                    string.Equals(NormalizeIdentifier(column.Name), NormalizeIdentifier(scopedColumn.Name), StringComparison.OrdinalIgnoreCase));
-                if (targetColumn == null)
-                    continue;
-
-                onClause = $"{scopedRef.EffectiveAlias}.{scopedColumn.Name} = {{alias}}.{targetColumn.Name}";
-                matchDetail = scopedColumn.Name;
-                return true;
-            }
-
-            return false;
-        }
-
         private static IEnumerable<ColumnInfo> GetLikelyJoinKeyColumns(TableInfo table)
         {
             return table.Columns.Where(column =>
@@ -1152,49 +894,6 @@ namespace OpenHintSQL.Completion
                 column.IsIdentity ||
                 string.Equals(NormalizeIdentifier(column.Name), "id", StringComparison.OrdinalIgnoreCase) ||
                 LooksLikeJoinId(column.Name));
-        }
-
-        private static IEnumerable<ColumnInfo> GetPreferredTargetJoinKeys(TableInfo table)
-        {
-            if (table?.Columns == null)
-                yield break;
-
-            var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var preferredNames = GetPreferredJoinKeyNames(table).ToList();
-            foreach (var preferredName in preferredNames)
-            {
-                var key = table.Columns
-                    .OrderBy(column => column.OrdinalPosition)
-                    .FirstOrDefault(column =>
-                        string.Equals(NormalizeIdentifier(column.Name), preferredName, StringComparison.OrdinalIgnoreCase));
-                if (key != null && emitted.Add(key.Name))
-                    yield return key;
-            }
-        }
-
-        private static ColumnInfo FindBestTargetKey(IEnumerable<ColumnInfo> candidateKeys, ColumnInfo sourceColumn, string sourceBase)
-        {
-            var normalizedSource = NormalizeIdentifier(sourceColumn.Name);
-            foreach (var candidate in candidateKeys)
-            {
-                if (string.Equals(NormalizeIdentifier(candidate.Name), normalizedSource, StringComparison.OrdinalIgnoreCase))
-                    return candidate;
-            }
-
-            foreach (var candidate in candidateKeys)
-            {
-                if (string.Equals(NormalizeIdentifier(candidate.Name), "id", StringComparison.OrdinalIgnoreCase))
-                    return candidate;
-            }
-
-            foreach (var candidate in candidateKeys)
-            {
-                if (TryGetIdBaseName(candidate.Name, out var candidateBase) &&
-                    string.Equals(candidateBase, sourceBase, StringComparison.OrdinalIgnoreCase))
-                    return candidate;
-            }
-
-            return candidateKeys.FirstOrDefault();
         }
 
         private static bool MatchesTableNameVariant(string tableName, string baseName)
@@ -1479,19 +1178,50 @@ namespace OpenHintSQL.Completion
             }
 
             // No schema specified — fall back to unique short-name match (mirrors what users do).
-            var byShort = schema.Tables.Values
-                .Where(t => string.Equals(t.Name, tableName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (byShort.Count == 1)
-                return byShort[0];
-
-            var viewByShort = schema.Views.Values
-                .Where(v => string.Equals(v.Name, tableName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (viewByShort.Count == 1)
-                return viewByShort[0];
+            // The cached lookup avoids a full table scan per FROM/JOIN reference on every keystroke.
+            var lookup = GetShortNameLookup(schema);
+            if (lookup.Tables.TryGetValue(tableName, out var uniqueTable) && uniqueTable != null)
+                return uniqueTable;
+            if (lookup.Views.TryGetValue(tableName, out var uniqueView) && uniqueView != null)
+                return uniqueView;
 
             return null;
+        }
+
+        /// <summary>
+        /// Short-name (unqualified) lookup tables. A null value marks an ambiguous
+        /// short name shared by multiple objects, mirroring the old "unique match only" scan.
+        /// </summary>
+        private sealed class ShortNameLookup
+        {
+            public Dictionary<string, TableInfo> Tables;
+            public Dictionary<string, TableInfo> Views;
+        }
+
+        /// <summary>
+        /// Weak per-schema cache. Schema reloads publish a fresh <see cref="DatabaseSchema"/>
+        /// instance, so stale entries fall out with the old object.
+        /// </summary>
+        private static readonly ConditionalWeakTable<DatabaseSchema, ShortNameLookup> ShortNameLookupBySchema =
+            new ConditionalWeakTable<DatabaseSchema, ShortNameLookup>();
+
+        private static ShortNameLookup GetShortNameLookup(DatabaseSchema schema)
+            => ShortNameLookupBySchema.GetValue(schema, BuildShortNameLookup);
+
+        private static ShortNameLookup BuildShortNameLookup(DatabaseSchema schema)
+        {
+            var lookup = new ShortNameLookup
+            {
+                Tables = new Dictionary<string, TableInfo>(StringComparer.OrdinalIgnoreCase),
+                Views = new Dictionary<string, TableInfo>(StringComparer.OrdinalIgnoreCase)
+            };
+
+            foreach (var table in schema.Tables.Values)
+                lookup.Tables[table.Name] = lookup.Tables.ContainsKey(table.Name) ? null : table;
+            foreach (var view in schema.Views.Values)
+                lookup.Views[view.Name] = lookup.Views.ContainsKey(view.Name) ? null : view;
+
+            return lookup;
         }
 
         /// <summary>
@@ -1657,16 +1387,14 @@ namespace OpenHintSQL.Completion
                 {
                     foreach (var tableName in referencedTables)
                     {
-                        var cols = schema.GetColumnsForTable(tableName);
-                        if (cols != null)
+                        var tableInfo = ResolveTableByAnyName(schema, tableName);
+                        if (tableInfo?.Columns == null)
+                            continue;
+
+                        foreach (var col in tableInfo.Columns)
                         {
-                            foreach (var col in cols)
-                            {
-                                if (MatchesColumnPrefix(col.Text, prefix))
-                                {
-                                    results.Add(col);
-                                }
-                            }
+                            if (MatchesColumnPrefix(col.Name, prefix))
+                                results.Add(BuildColumnItem(col, tableInfo.FullName));
                         }
                     }
                 }
@@ -2124,6 +1852,136 @@ namespace OpenHintSQL.Completion
             {
                 Logger.Error("AddScopedAliasSuggestions failed", ex);
             }
+        }
+
+        /// <summary>
+        /// Suggests complete ON conditions (<c>a.Col = b.Col</c>) between the current
+        /// join target and each table already in scope. FK-backed conditions come first;
+        /// name-based heuristic pairs follow for databases without declared FKs.
+        /// </summary>
+        private static void AddOnClauseJoinConditionSuggestions(
+            List<CompletionItemData> results,
+            DatabaseSchema schema,
+            string prefix,
+            string fullText,
+            int caretOffset)
+        {
+            try
+            {
+                string scopeText = fullText?.Substring(0, Math.Min(Math.Max(caretOffset, 0), fullText?.Length ?? 0)) ?? string.Empty;
+                var scoped = ResolveScopedTables(scopeText, schema);
+                if (scoped.Count < 2)
+                    return;
+
+                var target = scoped[scoped.Count - 1];
+                if (target.Table?.Columns == null || string.IsNullOrWhiteSpace(target.EffectiveAlias))
+                    return;
+
+                var preferredKeys = GetPreferredJoinKeyNames(target.Table).ToList();
+                var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                for (int i = 0; i < scoped.Count - 1; i++)
+                {
+                    var scopedRef = scoped[i];
+                    if (scopedRef.Table?.Columns == null || string.IsNullOrWhiteSpace(scopedRef.EffectiveAlias))
+                        continue;
+
+                    // FK-backed conditions: the exact column pairing declared in the database.
+                    foreach (var fk in schema.GetForeignKeysBetween(scopedRef.Table, target.Table))
+                    {
+                        bool scopedIsParent = ReferenceEquals(fk.ParentTable, scopedRef.Table);
+                        string parentAlias = scopedIsParent ? scopedRef.EffectiveAlias : target.EffectiveAlias;
+                        string refAlias = scopedIsParent ? target.EffectiveAlias : scopedRef.EffectiveAlias;
+
+                        var condition = new StringBuilder();
+                        for (int c = 0; c < fk.ParentColumns.Count && c < fk.ReferencedColumns.Count; c++)
+                        {
+                            if (c > 0) condition.Append(" AND ");
+                            condition.Append(parentAlias).Append('.').Append(fk.ParentColumns[c].Name);
+                            condition.Append(" = ");
+                            condition.Append(refAlias).Append('.').Append(fk.ReferencedColumns[c].Name);
+                        }
+
+                        EmitOnClauseCondition(results, emitted, condition.ToString(), prefix,
+                            description: $"FK {fk.Name}", priority: 200, sortOrder: i * 1000);
+                    }
+
+                    // Heuristic pairs: scoped columns that look joinable to the target,
+                    // paired with the matching target-side column.
+                    foreach (var candidate in scopedRef.Table.Columns
+                        .Select(column => new
+                        {
+                            Column = column,
+                            Rank = GetOnClauseJoinColumnRank(target.Table, column, preferredKeys)
+                        })
+                        .Where(x => x.Rank >= 0)
+                        .OrderBy(x => x.Rank)
+                        .ThenBy(x => x.Column.OrdinalPosition))
+                    {
+                        var targetColumn = FindTargetColumnForCandidate(target.Table, candidate.Column);
+                        if (targetColumn == null)
+                            continue;
+
+                        string condition = $"{scopedRef.EffectiveAlias}.{candidate.Column.Name} = {target.EffectiveAlias}.{targetColumn.Name}";
+                        EmitOnClauseCondition(results, emitted, condition, prefix,
+                            description: $"Join voi {target.EffectiveAlias} ({target.Table.Name})",
+                            priority: 190 - candidate.Rank,
+                            sortOrder: (i * 1000) + candidate.Column.OrdinalPosition);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("AddOnClauseJoinConditionSuggestions failed", ex);
+            }
+        }
+
+        private static void EmitOnClauseCondition(
+            List<CompletionItemData> results,
+            HashSet<string> emitted,
+            string condition,
+            string prefix,
+            string description,
+            int priority,
+            int sortOrder)
+        {
+            if (string.IsNullOrWhiteSpace(condition) || !emitted.Add(condition))
+                return;
+            if (!string.IsNullOrEmpty(prefix) && !MatchesPrefix(condition, prefix))
+                return;
+
+            results.Add(new CompletionItemData
+            {
+                Text = condition,
+                InsertText = condition,
+                Description = description,
+                Kind = CompletionItemKind.JoinSuggestion,
+                Priority = priority,
+                SortOrder = sortOrder,
+                IconKey = "JoinSuggestion"
+            });
+        }
+
+        /// <summary>
+        /// Finds the target-side column to pair with a scoped candidate column:
+        /// same normalized name first, then the target's PK / id-like key.
+        /// </summary>
+        private static ColumnInfo FindTargetColumnForCandidate(TableInfo targetTable, ColumnInfo candidate)
+        {
+            string normalized = NormalizeIdentifier(candidate.Name);
+            foreach (var column in targetTable.Columns)
+            {
+                if (string.Equals(NormalizeIdentifier(column.Name), normalized, StringComparison.OrdinalIgnoreCase))
+                    return column;
+            }
+
+            var pk = targetTable.PrimaryKeyColumns.OrderBy(c => c.OrdinalPosition).FirstOrDefault();
+            if (pk != null)
+                return pk;
+
+            return GetLikelyJoinKeyColumns(targetTable)
+                .OrderBy(c => c.OrdinalPosition)
+                .FirstOrDefault();
         }
 
         private static void AddOnClauseJoinColumnSuggestions(

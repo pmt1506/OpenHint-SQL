@@ -82,7 +82,7 @@ namespace OpenHintSQL.Utils
                 while (start > 0)
                 {
                     char c = snapshot[start - 1];
-                    if (char.IsLetterOrDigit(c) || c == '_')
+                    if (char.IsLetterOrDigit(c) || c == '_' || c == '@' || c == '#')
                     {
                         start--;
                     }
@@ -241,7 +241,7 @@ namespace OpenHintSQL.Utils
                 while (start > 0)
                 {
                     char c = snapshot[start - 1];
-                    if (char.IsLetterOrDigit(c) || c == '_')
+                    if (char.IsLetterOrDigit(c) || c == '_' || c == '@' || c == '#')
                     {
                         start--;
                     }

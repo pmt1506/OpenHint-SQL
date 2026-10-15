@@ -999,6 +999,8 @@ namespace OpenHintSQL.UI
                     return "Alias";
                 case CompletionItemKind.Column:
                     return "Column";
+                case CompletionItemKind.Variable:
+                    return "Variable";
                 case CompletionItemKind.Function:
                     return "Function";
                 case CompletionItemKind.Procedure:
